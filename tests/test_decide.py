@@ -193,3 +193,18 @@ def test_無害化で空になる新しい発行元は作らずai_review() -> No
 def test_文書タイプは新規作成でも無害化しない() -> None:
     d = run(DOC, cls(document_type="A/B."))
     assert d.document_type == "A/B."
+
+
+STALE = replace(DOC, tags=frozenset({1, 2, 99, 3, 4, 5}))
+
+
+def test_done_にするとき古い状態タグを外す() -> None:
+    assert run(STALE, cls()).tags == frozenset({99, 30, 3})
+
+
+def test_review_にするとき古い状態タグを外す() -> None:
+    assert run(STALE, cls(confident=False)).tags == frozenset({1, 99, 30, 4})
+
+
+def test_失敗時も古い状態タグを外す() -> None:
+    assert failed_tags(STALE, IDS) == frozenset({1, 99, 5})

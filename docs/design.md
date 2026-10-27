@@ -87,6 +87,7 @@ flowchart LR
    - `confident: false`、または発行元・文書タイプを新規作成した → `ai-todo` を外して `ai-review` を付ける（`inbox` は残す）
    - 書類に起因する失敗（JSON が壊れている、検証に通らない） → `ai-todo` のまま残し、次回に再試行する。3 回で `ai-failed`
    - 書類に起因しない失敗（利用枠の上限、認証エラー、ネットワーク障害） → 失敗回数に数えず、その回の処理を打ち切って次の周期まで待つ
+   - 結果のタグ（`ai-done`・`ai-review`・`ai-failed`）は 1 つだけにする。人が `ai-todo` を付け直して再分類した書類に前回の結果のタグが残っていれば、新しい結果のタグを付けるときに外す
 6. Storage Path に従い、Paperless がディスク上のファイルをリネーム・移動する
 7. 人が保存ビュー「確認待ち」（10 章）の書類を Web UI で確認・修正し、`ai-review`・`page-review`・`ai-failed` と `inbox` を外す
 8. Cloud Sync が整理済みのファイルを Google Drive に同期する

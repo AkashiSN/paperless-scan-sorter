@@ -111,7 +111,8 @@ def decide(
     review = bool(reasons)
     # PATCH の tags は置き換えなので、既存のタグに足した全体を返す。
     tags = set(doc.tags) | {tag_names[n] for n in c.tags if n in tag_names}
-    tags.discard(ids.ai_todo)
+    # 結果のタグは 1 つだけにする。前回の結果のタグが残っていれば外す。
+    tags -= {ids.ai_todo, ids.ai_done, ids.ai_review, ids.ai_failed}
     if review:
         tags.add(ids.ai_review)
     else:
@@ -130,5 +131,5 @@ def decide(
 
 
 def failed_tags(doc: Document, ids: TagIds) -> frozenset[int]:
-    """失敗時に送るタグ。ai-todo を外して ai-failed を足し、inbox は残す。"""
-    return (doc.tags - {ids.ai_todo}) | {ids.ai_failed}
+    """失敗時に送るタグ。ai-todo と前回の結果のタグを外して ai-failed を足し、inbox は残す。"""
+    return (doc.tags - {ids.ai_todo, ids.ai_done, ids.ai_review}) | {ids.ai_failed}
