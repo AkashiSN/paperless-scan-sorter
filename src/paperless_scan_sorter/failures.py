@@ -1,7 +1,8 @@
 """書類ごとの処理の状態（失敗回数・新規作成の有無）を JSON ファイルに残す。
 
-再起動しても回数を引き継ぐ。ファイルが無い・壊れている場合は空として扱い、
-処理を止めない。
+再起動しても回数を引き継ぐ。ファイルが無い場合はどちらも空として扱う。壊れている場合、
+失敗回数は空として扱って処理を止めないが、新規作成の記録は利用不可として周期を止める
+（記録を失うと、AI が作った名前が人の確認を経ずに通るため。D-009）。
 """
 
 from __future__ import annotations
@@ -12,17 +13,16 @@ import os
 import tempfile
 from pathlib import Path
 
+from paperless_scan_sorter.errors import ServiceUnavailable
+
 logger = logging.getLogger(__name__)
 
 
-def _load_json(path: Path, label: str) -> object | None:
-    """ファイルを読む。無ければ None、読めなければ警告して None を返す。"""
+def _read_json(path: Path) -> object | None:
+    """ファイルを読む。無ければ None。読めない・JSON でなければ OSError か ValueError。"""
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return None
-    except (OSError, ValueError) as e:
-        logger.warning("%sのファイルを読めないため空として扱います: %s", label, type(e).__name__)
         return None
 
 
@@ -65,7 +65,11 @@ class FailureStore:
 
     def _load(self) -> dict[str, int]:
         """ファイルを読む。読めない・形が違うときは警告して空を返す。"""
-        raw = _load_json(self._path, "失敗回数")
+        try:
+            raw = _read_json(self._path)
+        except (OSError, ValueError) as e:
+            logger.warning("失敗回数のファイルを読めないため空として扱います: %s", type(e).__name__)
+            return {}
         if raw is None:
             return {}
         if not isinstance(raw, dict) or not all(
@@ -80,14 +84,20 @@ class FailureStore:
 
 
 class CreatedStore:
-    """この分類器が発行元・文書タイプを新規作成した書類の ID を `[<doc_id>, …]` 形式で残す。
+    """この分類器が発行元・文書タイプを新規作成する書類の ID を `[<doc_id>, …]` 形式で残す。
 
     作成の後に PATCH が失敗すると、次の試行では作った名前が既存として見え、確認待ちを
-    経ずに ai-done に進んでしまう。それを防ぐため、書き戻しが済むまで記録を残す（D-009）。
+    経ずに ai-done に進んでしまう。それを防ぐため、作成を試みる前に記録し、書き戻しが
+    済むか ai-failed に送るまで残す（D-009）。ファイルが読めない・形が違うときは
+    ServiceUnavailable を送出し、中身を空とみなして上書きすることはしない。
     """
 
     def __init__(self, path: Path) -> None:
         self._path = path
+
+    def check(self) -> None:
+        """ファイルを読めるか確かめる。読めなければ ServiceUnavailable。"""
+        self._load()
 
     def contains(self, doc_id: int) -> bool:
         return doc_id in self._load()
@@ -106,13 +116,18 @@ class CreatedStore:
             _save_json(self._path, sorted(ids))
 
     def _load(self) -> set[int]:
-        """ファイルを読む。読めない・形が違うときは警告して空を返す。"""
-        raw = _load_json(self._path, "新規作成の記録")
+        """ファイルを読む。無ければ空。読めない・形が違うときは ServiceUnavailable。"""
+        try:
+            raw = _read_json(self._path)
+        except (OSError, ValueError) as e:
+            raw = e
         if raw is None:
             return set()
-        if not isinstance(raw, list) or not all(
+        if isinstance(raw, list) and all(
             isinstance(v, int) and not isinstance(v, bool) for v in raw
         ):
-            logger.warning("新規作成の記録のファイルの形式が不正なため空として扱います")
-            return set()
-        return set(raw)
+            return set(raw)
+        # 中身は書類の ID だけだが、壊れ方によっては何が入っているか分からないので出さない。
+        reason = type(raw).__name__ if isinstance(raw, Exception) else "形式が不正"
+        logger.error("新規作成の記録 %s を読めない: %s", self._path, reason)
+        raise ServiceUnavailable("新規作成の記録を読めない")

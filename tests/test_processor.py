@@ -13,7 +13,7 @@ import httpx
 import pytest
 
 from paperless_scan_sorter.claude import ClaudeClient
-from paperless_scan_sorter.errors import MissingTagsError
+from paperless_scan_sorter.errors import MissingTagsError, ServiceUnavailable
 from paperless_scan_sorter.failures import CreatedStore, FailureStore
 from paperless_scan_sorter.paperless import Named, PaperlessClient
 from paperless_scan_sorter.processor import (
@@ -507,3 +507,96 @@ def test_上限に達した書類のai_failedへのPATCHが400なら回数を残
     assert len(claude.calls) == 1
     assert store.count(100) == 3
     assert 101 in server.patches
+
+
+def test_発行元の作成で利用不可になっても作成前に記録を残す(
+    store: FailureStore, created: CreatedStore
+) -> None:
+    # 作成が Paperless で確定したのに応答だけ失われた場合と区別できないので、記録は残す。
+    server = FakePaperless([_doc(100), _doc(101)])
+    server.post_status["/api/correspondents/"] = 503
+    claude = FakeClaude(ok(_answer(correspondent="△△商事")))
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
+    assert r == CycleResult(aborted=True)
+    assert created.contains(100)
+    assert store.count(100) == 0
+    assert server.patches == {}
+
+
+def test_文書タイプの作成で利用不可になっても作成前に記録を残す(
+    store: FailureStore, created: CreatedStore
+) -> None:
+    server = FakePaperless([_doc()])
+    server.post_status["/api/document_types/"] = 503
+    claude = FakeClaude(ok(_answer(document_type="通知書")))
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
+    assert r == CycleResult(aborted=True)
+    assert created.contains(DOC_ID)
+
+
+def test_作成が利用不可で終わった書類は次の周期でai_reviewにする(
+    store: FailureStore, created: CreatedStore
+) -> None:
+    server = FakePaperless([_doc()])
+    server.post_status["/api/correspondents/"] = 503
+    claude = FakeClaude(ok(_answer(correspondent="△△商事")))
+    run_cycle(server.client(), claude.client(), store, created, today=TODAY)
+    # Paperless 側では作成が確定していて、次の周期では既存として見える。
+    del server.post_status["/api/correspondents/"]
+    server.correspondent_rows.append({"id": 501, "name": "△△商事"})
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
+    assert r == CycleResult(review=1)
+    assert AI_REVIEW in server.patches[DOC_ID]["tags"]
+    assert not created.contains(DOC_ID)
+
+
+def test_新規作成の記録が壊れていたら周期を打ち切る(
+    tmp_path: Path, store: FailureStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    path = tmp_path / "created.json"
+    path.write_text("{壊れ", encoding="utf-8")
+    created = CreatedStore(path)
+    server = FakePaperless([_doc(100), _doc(101)])
+    claude = FakeClaude(ok(_answer()))
+    with caplog.at_level(logging.ERROR):
+        r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
+    assert r == CycleResult(aborted=True)
+    assert claude.calls == []
+    assert server.patches == {}
+    assert server.posts == []
+    assert store.count(100) == 0
+    assert path.read_text(encoding="utf-8") == "{壊れ"
+    assert str(path) in caplog.text
+
+
+def test_上限に達した書類でも新規作成の記録が壊れていたら周期を打ち切る(
+    tmp_path: Path, store: FailureStore
+) -> None:
+    for _ in range(3):
+        store.increment(DOC_ID)
+    path = tmp_path / "created.json"
+    path.write_text("{壊れ", encoding="utf-8")
+    server = FakePaperless([_doc()])
+    r = run_cycle(
+        server.client(), FakeClaude(ok(_answer())).client(), store, CreatedStore(path), today=TODAY
+    )
+    assert r.aborted
+    assert store.count(DOC_ID) == 3
+
+
+class ClearFailsCreated(CreatedStore):
+    """記録の消去だけが利用不可になる新規作成の記録。"""
+
+    def clear(self, doc_id: int) -> None:
+        raise ServiceUnavailable("新規作成の記録を読めない")
+
+
+def test_書き戻し後の記録の消去で利用不可なら集計してから打ち切る(
+    tmp_path: Path, store: FailureStore
+) -> None:
+    server = FakePaperless([_doc(100), _doc(101)])
+    claude = FakeClaude(ok(_answer()))
+    created = ClearFailsCreated(tmp_path / "created.json")
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
+    assert r == CycleResult(done=1, aborted=True)
+    assert list(server.patches) == [100]

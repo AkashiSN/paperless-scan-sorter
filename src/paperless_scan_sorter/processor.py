@@ -69,6 +69,8 @@ def run_cycle(
         document_types = paperless.document_types()
         ids = resolve_tag_ids(tags)
         docs = paperless.documents_with_tag(ids.ai_todo)
+        # 新規作成の記録が読めないまま進むと、確認待ちに回すべき書類を見落とす（D-009）。
+        created.check()
     except ServiceUnavailable as e:
         logger.error("周期の準備に失敗したため打ち切る: %s", e)
         result.aborted = True
@@ -129,13 +131,18 @@ def run_cycle(
                 return result
             continue
         store.clear(doc.id)
-        created.clear(doc.id)
         if decision.review:
             result.review += 1
             logger.info("書類 %d: review (%s)", doc.id, ", ".join(decision.reasons))
         else:
             result.done += 1
             logger.info("書類 %d: done", doc.id)
+        try:
+            created.clear(doc.id)
+        except ServiceUnavailable as e:
+            logger.error("書類 %d の記録の後始末で利用不可となり周期を打ち切る: %s", doc.id, e)
+            result.aborted = True
+            return result
     return result
 
 
@@ -172,16 +179,18 @@ def _classify(
         extra_review_reasons=extra,
     )
     correspondent = decision.correspondent
+    document_type = decision.document_type
+    if isinstance(correspondent, str) or isinstance(document_type, str):
+        # 作成を試みる前に記録する。作成が Paperless で確定した後に応答が失われても、
+        # 次の試行で確認待ちに回せるようにするため（D-009）。
+        created.mark(doc.id)
     if isinstance(correspondent, str):
         new = paperless.create_correspondent(correspondent)
-        created.mark(doc.id)
         correspondents.append(new)
         logger.info("発行元を新規作成: %s", new.name)
         correspondent = new.id
-    document_type = decision.document_type
     if isinstance(document_type, str):
         new = paperless.create_document_type(document_type)
-        created.mark(doc.id)
         document_types.append(new)
         logger.info("文書タイプを新規作成: %s", new.name)
         document_type = new.id

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from paperless_scan_sorter.errors import ServiceUnavailable
 from paperless_scan_sorter.failures import CreatedStore, FailureStore
 
 
@@ -81,15 +82,39 @@ def test_新規作成した書類を記録して消せる(tmp_path: Path) -> Non
     assert s.contains(8)
 
 
-@pytest.mark.parametrize("content", ["{壊れ", '{"7": true}', '["7"]', "[true]"])
-def test_新規作成の記録が読めなければ空として扱う(
+@pytest.mark.parametrize("content", ["{壊れ", '{"7": true}', '["7"]', "[true]", "\xff"])
+def test_新規作成の記録が読めなければ利用不可として止める(
     tmp_path: Path, content: str, caplog: pytest.LogCaptureFixture
 ) -> None:
     p = tmp_path / "created.json"
-    p.write_text(content, encoding="utf-8")
-    with caplog.at_level(logging.WARNING):
-        assert not CreatedStore(p).contains(7)
-    assert caplog.records
+    p.write_bytes(content.encode("latin-1") if content == "\xff" else content.encode())
+    s = CreatedStore(p)
+    with caplog.at_level(logging.ERROR), pytest.raises(ServiceUnavailable):
+        s.contains(7)
+    # 1 回の読み取りにつき、ファイルの場所を示す ERROR を 1 行だけ出す。
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert len(errors) == 1
+    with pytest.raises(ServiceUnavailable):
+        s.mark(7)
+    with pytest.raises(ServiceUnavailable):
+        s.clear(7)
+    with pytest.raises(ServiceUnavailable):
+        s.check()
+    assert str(p) in errors[0].getMessage()
+    # 壊れた中身はログに出さず、上書きもしない。
+    assert "壊れ" not in errors[0].getMessage()
+    assert p.read_bytes() == (content.encode("latin-1") if content == "\xff" else content.encode())
+
+
+def test_新規作成の記録がディレクトリなら利用不可として止める(tmp_path: Path) -> None:
+    p = tmp_path / "created.json"
+    p.mkdir()
+    with pytest.raises(ServiceUnavailable):
+        CreatedStore(p).contains(7)
+
+
+def test_新規作成の記録が無ければ空(tmp_path: Path) -> None:
+    assert not CreatedStore(tmp_path / "created.json").contains(7)
 
 
 def test_新規作成の記録は一時ファイルを残さない(tmp_path: Path) -> None:
