@@ -23,7 +23,7 @@ def env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 def test_onceは1周期で終わる(monkeypatch: pytest.MonkeyPatch, env: None) -> None:
     calls: list[date] = []
 
-    def fake(paperless, claude, store, *, today):  # noqa: ANN001, ANN202
+    def fake(paperless, claude, store, created, *, today):  # noqa: ANN001, ANN202
         calls.append(today)
         return CycleResult(done=1)
 

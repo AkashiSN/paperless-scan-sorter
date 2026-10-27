@@ -65,8 +65,13 @@ def decide(
     document_types: Sequence[Named],
     tag_names: Mapping[str, int],
     ids: TagIds,
+    extra_review_reasons: Sequence[str] = (),
 ) -> Decision:
-    """書類と検証済みの判定結果から、書き戻す内容を決める。"""
+    """書類と検証済みの判定結果から、書き戻す内容を決める。
+
+    extra_review_reasons は判定結果の外から分かる確認待ちの理由で、他の理由の後ろに
+    足し、1 つでもあれば確認待ちにする。
+    """
     reasons: list[str] = []
 
     correspondent, reason = _choose(doc.correspondent, c.correspondent, correspondents, "発行元")
@@ -81,6 +86,7 @@ def decide(
         reasons.append("タイトルを採用できない")
     if not c.confident:
         reasons.append("自信なし")
+    reasons.extend(extra_review_reasons)
 
     review = bool(reasons)
     # PATCH の tags は置き換えなので、既存のタグに足した全体を返す。

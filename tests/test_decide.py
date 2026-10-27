@@ -123,3 +123,32 @@ def test_一覧に無いタグ名は読み飛ばす() -> None:
 
 def test_失敗時はai_todoを外しai_failedを足す() -> None:
     assert failed_tags(DOC, IDS) == frozenset({1, 99, 5})
+
+
+def test_追加の理由があればai_reviewにして理由の最後に足す() -> None:
+    d = decide(
+        DOC,
+        cls(confident=False),
+        correspondents=CORR,
+        document_types=TYPES,
+        tag_names=TAGN,
+        ids=IDS,
+        extra_review_reasons=("前回の試行で発行元・文書タイプを新規作成",),
+    )
+    assert d.review
+    assert d.reasons == ("自信なし", "前回の試行で発行元・文書タイプを新規作成")
+    assert 4 in d.tags and 3 not in d.tags and 1 in d.tags
+
+
+def test_追加の理由だけでもai_reviewにする() -> None:
+    d = decide(
+        DOC,
+        cls(),
+        correspondents=CORR,
+        document_types=TYPES,
+        tag_names=TAGN,
+        ids=IDS,
+        extra_review_reasons=("理由",),
+    )
+    assert d.review and d.reasons == ("理由",)
+    assert d.correspondent == 10

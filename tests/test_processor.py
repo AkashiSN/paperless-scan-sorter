@@ -14,7 +14,7 @@ import pytest
 
 from paperless_scan_sorter.claude import ClaudeClient
 from paperless_scan_sorter.errors import MissingTagsError
-from paperless_scan_sorter.failures import FailureStore
+from paperless_scan_sorter.failures import CreatedStore, FailureStore
 from paperless_scan_sorter.paperless import Named, PaperlessClient
 from paperless_scan_sorter.processor import (
     CONTENT_LIMIT,
@@ -163,10 +163,15 @@ def store(tmp_path: Path) -> FailureStore:
     return FailureStore(tmp_path / "failures.json")
 
 
-def test_通常の書類をai_doneにする(store: FailureStore) -> None:
+@pytest.fixture
+def created(tmp_path: Path) -> CreatedStore:
+    return CreatedStore(tmp_path / "created.json")
+
+
+def test_通常の書類をai_doneにする(store: FailureStore, created: CreatedStore) -> None:
     server = FakePaperless([_doc()])
     claude = FakeClaude(ok(_answer()))
-    r = run_cycle(server.client(), claude.client(), store, today=TODAY)
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
     assert r == CycleResult(done=1)
     assert server.patches[DOC_ID] == {
         "tags": sorted([EXISTING_TAG, CHOSEN_TAG, AI_DONE]),
@@ -178,10 +183,10 @@ def test_通常の書類をai_doneにする(store: FailureStore) -> None:
     assert server.posts == []
 
 
-def test_新しい発行元を作ってai_reviewにする(store: FailureStore) -> None:
+def test_新しい発行元を作ってai_reviewにする(store: FailureStore, created: CreatedStore) -> None:
     server = FakePaperless([_doc()])
     claude = FakeClaude(ok(_answer(correspondent="△△商事")))
-    r = run_cycle(server.client(), claude.client(), store, today=TODAY)
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
     assert r == CycleResult(review=1)
     assert server.posts_to("/api/correspondents/") == [{"name": "△△商事"}]
     patch = server.patches[DOC_ID]
@@ -191,66 +196,68 @@ def test_新しい発行元を作ってai_reviewにする(store: FailureStore) -
     assert INBOX in patch["tags"]
 
 
-def test_新しい文書タイプを作る(store: FailureStore) -> None:
+def test_新しい文書タイプを作る(store: FailureStore, created: CreatedStore) -> None:
     server = FakePaperless([_doc()])
     claude = FakeClaude(ok(_answer(document_type="領収書")))
-    r = run_cycle(server.client(), claude.client(), store, today=TODAY)
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
     assert r.review == 1
     assert server.posts_to("/api/document_types/") == [{"name": "領収書"}]
     assert server.patches[DOC_ID]["document_type"] == 501
 
 
-def test_同じ周期で同じ新しい発行元を2度作らない(store: FailureStore) -> None:
+def test_同じ周期で同じ新しい発行元を2度作らない(
+    store: FailureStore, created: CreatedStore
+) -> None:
     server = FakePaperless([_doc(100), _doc(101)])
     claude = FakeClaude(ok(_answer(correspondent="△△商事")))
-    r = run_cycle(server.client(), claude.client(), store, today=TODAY)
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
     assert len(server.posts_to("/api/correspondents/")) == 1
     # 2 件目は既存として使われるため、decide の規則どおり done になる。
     assert r == CycleResult(done=1, review=1)
     assert server.patches[100]["correspondent"] == server.patches[101]["correspondent"] == 501
 
 
-def test_本文が短ければPDFを読ませる(store: FailureStore) -> None:
+def test_本文が短ければPDFを読ませる(store: FailureStore, created: CreatedStore) -> None:
     server = FakePaperless([_doc(content="  \n")])
     claude = FakeClaude(ok(_answer()))
-    r = run_cycle(server.client(), claude.client(), store, today=TODAY)
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
     assert r.done == 1
     assert server.downloads == [DOC_ID]
     assert "--allowedTools" in claude.calls[0]["argv"]
     assert claude.calls[0]["stdin"] is None
 
 
-def test_本文は8000文字で切る(store: FailureStore) -> None:
+def test_本文は8000文字で切る(store: FailureStore, created: CreatedStore) -> None:
     server = FakePaperless([_doc(content="あ" * 9000)])
     claude = FakeClaude(ok(_answer()))
-    run_cycle(server.client(), claude.client(), store, today=TODAY)
+    run_cycle(server.client(), claude.client(), store, created, today=TODAY)
     assert CONTENT_LIMIT == 8000
     assert len(claude.calls[0]["stdin"]) == 8000
     assert server.downloads == []
 
 
-def test_壊れた出力は再試行に回す(store: FailureStore) -> None:
+def test_壊れた出力は再試行に回す(store: FailureStore, created: CreatedStore) -> None:
     server = FakePaperless([_doc()])
     claude = FakeClaude(ok("壊れ"))
-    r = run_cycle(server.client(), claude.client(), store, today=TODAY)
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
     assert r == CycleResult(retried=1)
     assert server.patches == {}
     assert store.count(DOC_ID) == 1
 
 
-def test_3回目の失敗でai_failedにする(store: FailureStore) -> None:
+def test_3回目の失敗でai_failedにする(store: FailureStore, created: CreatedStore) -> None:
     store.increment(DOC_ID)
     store.increment(DOC_ID)
     server = FakePaperless([_doc()])
     claude = FakeClaude(ok("壊れ"))
-    r = run_cycle(server.client(), claude.client(), store, today=TODAY)
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
     assert r == CycleResult(failed=1)
     assert server.patches[DOC_ID] == {"tags": sorted([INBOX, EXISTING_TAG, AI_FAILED])}
     assert store.count(DOC_ID) == 0
 
 
 def test_ai_failedへのPATCHが失敗しても次の書類へ進む(
-    store: FailureStore, caplog: pytest.LogCaptureFixture
+    store: FailureStore, created: CreatedStore, caplog: pytest.LogCaptureFixture
 ) -> None:
     store.increment(100)
     store.increment(100)
@@ -258,55 +265,55 @@ def test_ai_failedへのPATCHが失敗しても次の書類へ進む(
     server.patch_status[100] = 400
     claude = FakeClaude(ok("壊れ"), ok(_answer()))
     with caplog.at_level(logging.WARNING):
-        r = run_cycle(server.client(), claude.client(), store, today=TODAY)
+        r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
     assert r.done == 1
     assert 101 in server.patches
     assert store.count(100) == 3
     assert any(rec.levelno == logging.WARNING for rec in caplog.records)
 
 
-def test_利用枠の上限で周期を打ち切り数えない(store: FailureStore) -> None:
+def test_利用枠の上限で周期を打ち切り数えない(store: FailureStore, created: CreatedStore) -> None:
     server = FakePaperless([_doc(100), _doc(101)])
     claude = FakeClaude(quota())
-    r = run_cycle(server.client(), claude.client(), store, today=TODAY)
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
     assert r.aborted
     assert len(claude.calls) == 1
     assert store.count(100) == 0
     assert server.patches == {}
 
 
-def test_一覧の取得で利用不可なら打ち切る(store: FailureStore) -> None:
+def test_一覧の取得で利用不可なら打ち切る(store: FailureStore, created: CreatedStore) -> None:
     server = FakePaperless([_doc()])
     server.list_status = 503
     claude = FakeClaude(ok(_answer()))
-    r = run_cycle(server.client(), claude.client(), store, today=TODAY)
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
     assert r == CycleResult(aborted=True)
     assert claude.calls == []
 
 
-def test_1件のPATCHが400でも次の書類を処理する(store: FailureStore) -> None:
+def test_1件のPATCHが400でも次の書類を処理する(store: FailureStore, created: CreatedStore) -> None:
     server = FakePaperless([_doc(100), _doc(101)])
     server.patch_status[100] = 400
     claude = FakeClaude(ok(_answer()))
-    r = run_cycle(server.client(), claude.client(), store, today=TODAY)
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
     assert r == CycleResult(done=1, retried=1)
     assert store.count(100) == 1
     assert 101 in server.patches
 
 
-def test_成功したら失敗回数を消す(store: FailureStore) -> None:
+def test_成功したら失敗回数を消す(store: FailureStore, created: CreatedStore) -> None:
     store.increment(DOC_ID)
     server = FakePaperless([_doc()])
-    run_cycle(server.client(), FakeClaude(ok(_answer())).client(), store, today=TODAY)
+    run_cycle(server.client(), FakeClaude(ok(_answer())).client(), store, created, today=TODAY)
     assert store.count(DOC_ID) == 0
 
 
 def test_ログに書類IDと結果を出し本文とタイトルは出さない(
-    store: FailureStore, caplog: pytest.LogCaptureFixture
+    store: FailureStore, created: CreatedStore, caplog: pytest.LogCaptureFixture
 ) -> None:
     server = FakePaperless([_doc()])
     with caplog.at_level(logging.INFO):
-        run_cycle(server.client(), FakeClaude(ok(_answer())).client(), store, today=TODAY)
+        run_cycle(server.client(), FakeClaude(ok(_answer())).client(), store, created, today=TODAY)
     text = "\n".join(r.getMessage() for r in caplog.records)
     assert str(DOC_ID) in text
     assert "done" in text
@@ -331,22 +338,26 @@ def test_必須タグがそろえばIDを引く() -> None:
     assert (ids.inbox, ids.ai_todo, ids.ai_done, ids.ai_review, ids.ai_failed) == (1, 2, 3, 4, 5)
 
 
-def test_ai_failedへのPATCHで利用不可なら周期を打ち切る(store: FailureStore) -> None:
+def test_ai_failedへのPATCHで利用不可なら周期を打ち切る(
+    store: FailureStore, created: CreatedStore
+) -> None:
     store.increment(100)
     store.increment(100)
     server = FakePaperless([_doc(100), _doc(101)])
     server.patch_status[100] = 503
     claude = FakeClaude(ok("壊れ"))
-    r = run_cycle(server.client(), claude.client(), store, today=TODAY)
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
     assert r.aborted
     assert len(claude.calls) == 1
 
 
-def test_発行元の作成が400でも次の書類を処理する(store: FailureStore) -> None:
+def test_発行元の作成が400でも次の書類を処理する(
+    store: FailureStore, created: CreatedStore
+) -> None:
     server = FakePaperless([_doc(100), _doc(101)])
     server.post_status["/api/correspondents/"] = 400
     claude = FakeClaude(ok(_answer(correspondent="△△商事")), ok(_answer()))
-    r = run_cycle(server.client(), claude.client(), store, today=TODAY)
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
     assert r == CycleResult(done=1, retried=1)
     assert not r.aborted
     assert store.count(100) == 1
@@ -376,13 +387,13 @@ class RaisingFirstClaude(FakeClaude):
 
 
 def test_想定外の例外は書類の失敗として数え次の書類へ進む(
-    store: FailureStore, caplog: pytest.LogCaptureFixture
+    store: FailureStore, created: CreatedStore, caplog: pytest.LogCaptureFixture
 ) -> None:
     server = FakePaperless([_doc(100), _doc(101)])
     error = UnicodeEncodeError("utf-8", "秘密の本文", 0, 1, "surrogates not allowed")
     claude = RaisingFirstClaude(error, ok(_answer()))
     with caplog.at_level(logging.INFO):
-        r = run_cycle(server.client(), claude.client(), store, today=TODAY)
+        r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
     assert r == CycleResult(done=1, retried=1)
     assert store.count(100) == 1
     assert 101 in server.patches
@@ -392,13 +403,62 @@ def test_想定外の例外は書類の失敗として数え次の書類へ進�
     assert all(rec.exc_info is None for rec in caplog.records)
 
 
-def test_大きすぎるPDFはclaudeに渡さず書類の失敗にする(store: FailureStore) -> None:
+def test_大きすぎるPDFはclaudeに渡さず書類の失敗にする(
+    store: FailureStore, created: CreatedStore
+) -> None:
     assert MAX_PDF_BYTES == 20 * 1024 * 1024
     server = FakePaperless([_doc(100, content=""), _doc(101)])
     server.pdf = b"%" * (MAX_PDF_BYTES + 1)
     claude = FakeClaude(ok(_answer()))
-    r = run_cycle(server.client(), claude.client(), store, today=TODAY)
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
     assert r == CycleResult(done=1, retried=1)
     assert store.count(100) == 1
     assert len(claude.calls) == 1
     assert "--allowedTools" not in claude.calls[0]["argv"]
+
+
+def test_新規作成後にPATCHが失敗したら次の周期はai_reviewにする(
+    store: FailureStore, created: CreatedStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    server = FakePaperless([_doc()])
+    server.patch_status[DOC_ID] = 400
+    claude = FakeClaude(ok(_answer(correspondent="△△商事")))
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
+    assert r == CycleResult(retried=1)
+    assert created.contains(DOC_ID)
+
+    # 次の周期では作った発行元が既存として見えるが、ai-done にはしない。
+    server.correspondent_rows.append({"id": 501, "name": "△△商事"})
+    del server.patch_status[DOC_ID]
+    with caplog.at_level(logging.INFO):
+        r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
+    assert r == CycleResult(review=1)
+    patch = server.patches[DOC_ID]
+    assert patch["correspondent"] == 501
+    assert AI_REVIEW in patch["tags"] and AI_DONE not in patch["tags"]
+    assert "前回の試行で発行元・文書タイプを新規作成" in caplog.text
+    assert len(server.posts_to("/api/correspondents/")) == 1
+    assert not created.contains(DOC_ID)
+
+
+def test_文書タイプの作成が失敗しても発行元の作成は記録する(
+    store: FailureStore, created: CreatedStore
+) -> None:
+    server = FakePaperless([_doc()])
+    server.post_status["/api/document_types/"] = 400
+    claude = FakeClaude(ok(_answer(correspondent="△△商事", document_type="通知書")))
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
+    assert r == CycleResult(retried=1)
+    assert created.contains(DOC_ID)
+
+
+def test_ai_failedに送ったら新規作成の記録を消す(
+    store: FailureStore, created: CreatedStore
+) -> None:
+    store.increment(DOC_ID)
+    store.increment(DOC_ID)
+    created.mark(DOC_ID)
+    server = FakePaperless([_doc()])
+    r = run_cycle(server.client(), FakeClaude(ok("壊れ")).client(), store, created, today=TODAY)
+    assert r == CycleResult(failed=1)
+    assert not created.contains(DOC_ID)

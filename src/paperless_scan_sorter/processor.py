@@ -10,7 +10,7 @@ from datetime import date
 from paperless_scan_sorter.claude import ClaudeClient
 from paperless_scan_sorter.decide import Decision, TagIds, decide, failed_tags
 from paperless_scan_sorter.errors import DocumentFailure, MissingTagsError, ServiceUnavailable
-from paperless_scan_sorter.failures import FailureStore
+from paperless_scan_sorter.failures import CreatedStore, FailureStore
 from paperless_scan_sorter.paperless import Document, Named, PaperlessClient
 from paperless_scan_sorter.prompt import build_prompt
 from paperless_scan_sorter.tags import REQUIRED_TAGS
@@ -20,6 +20,8 @@ logger = logging.getLogger(__name__)
 
 MAX_FAILURES = 3
 CONTENT_LIMIT = 8000
+# 前回の試行で発行元・文書タイプを作った書類を確認待ちにするときの理由。
+CREATED_BEFORE_REASON = "前回の試行で発行元・文書タイプを新規作成"
 MIN_TEXT_CHARS = 100
 # claude に読ませる PDF の上限。これを超える書類は読ませずに書類の失敗にする（D-008）。
 MAX_PDF_BYTES = 20 * 1024 * 1024
@@ -55,6 +57,7 @@ def run_cycle(
     paperless: PaperlessClient,
     claude: ClaudeClient,
     store: FailureStore,
+    created: CreatedStore,
     *,
     today: date,
 ) -> CycleResult:
@@ -90,6 +93,7 @@ def run_cycle(
                 tag_names,
                 ids,
                 today,
+                created,
             )
             fields = _fields(decision)
             paperless.patch_document(doc.id, fields)
@@ -106,7 +110,7 @@ def run_cycle(
                 logger.error("書類 %d の処理中に想定外の例外: %s", doc.id, type(e).__name__)
                 failure = DocumentFailure(f"想定外の例外 ({type(e).__name__})")
             try:
-                _on_failure(doc, failure, paperless, store, ids, result)
+                _on_failure(doc, failure, paperless, store, created, ids, result)
             except ServiceUnavailable as unavailable:
                 logger.error(
                     "書類 %d の失敗処理中に利用不可となり周期を打ち切る: %s", doc.id, unavailable
@@ -115,6 +119,7 @@ def run_cycle(
                 return result
             continue
         store.clear(doc.id)
+        created.clear(doc.id)
         if decision.review:
             result.review += 1
             logger.info("書類 %d: review (%s)", doc.id, ", ".join(decision.reasons))
@@ -134,6 +139,7 @@ def _classify(
     tag_names: dict[str, int],
     ids: TagIds,
     today: date,
+    created: CreatedStore,
 ) -> Decision:
     """書類を判定し、新規の発行元・文書タイプを作って ID に置き換えた Decision を返す。"""
     if sum(1 for ch in doc.content if not ch.isspace()) < MIN_TEXT_CHARS:
@@ -144,6 +150,8 @@ def _classify(
     else:
         text = claude.classify_text(prompt, doc.content[:CONTENT_LIMIT])
     classification = parse_classification(text, known_tags=tag_names.keys(), today=today)
+    # 前回作った名前は今回は既存として見えるので、記録から確認待ちに回す（D-009）。
+    extra = (CREATED_BEFORE_REASON,) if created.contains(doc.id) else ()
     decision = decide(
         doc,
         classification,
@@ -151,19 +159,22 @@ def _classify(
         document_types=document_types,
         tag_names=tag_names,
         ids=ids,
+        extra_review_reasons=extra,
     )
     correspondent = decision.correspondent
     if isinstance(correspondent, str):
-        created = paperless.create_correspondent(correspondent)
-        correspondents.append(created)
-        logger.info("発行元を新規作成: %s", created.name)
-        correspondent = created.id
+        new = paperless.create_correspondent(correspondent)
+        created.mark(doc.id)
+        correspondents.append(new)
+        logger.info("発行元を新規作成: %s", new.name)
+        correspondent = new.id
     document_type = decision.document_type
     if isinstance(document_type, str):
-        created = paperless.create_document_type(document_type)
-        document_types.append(created)
-        logger.info("文書タイプを新規作成: %s", created.name)
-        document_type = created.id
+        new = paperless.create_document_type(document_type)
+        created.mark(doc.id)
+        document_types.append(new)
+        logger.info("文書タイプを新規作成: %s", new.name)
+        document_type = new.id
     return Decision(
         title=decision.title,
         correspondent=correspondent,
@@ -194,6 +205,7 @@ def _on_failure(
     error: DocumentFailure,
     paperless: PaperlessClient,
     store: FailureStore,
+    created: CreatedStore,
     ids: TagIds,
     result: CycleResult,
 ) -> None:
@@ -209,5 +221,6 @@ def _on_failure(
         logger.warning("書類 %d: ai-failed への付け替えに失敗: %s", doc.id, e)
     else:
         store.clear(doc.id)
+        created.clear(doc.id)
     result.failed += 1
     logger.info("書類 %d: failed", doc.id)

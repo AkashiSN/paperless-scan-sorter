@@ -202,6 +202,7 @@ claude -p --model sonnet --max-turns 3 --output-format json \
 - **長さの上限:** `title` は 60 文字、`correspondent` は 30 文字まで（ファイル名の上限 255 バイトに対し、日本語は UTF-8 で 1 文字 3 バイト）。超えた分は切り詰める
 - タグは既存のものだけを採用し、未知のタグと状態管理用のタグは捨てる（分類体系の増殖を防ぐ）。採用したタグは書類の既存タグにマージする
 - 発行元と文書タイプは新規作成を許可するが、作成した場合は `confident` にかかわらず `ai-review` に回す（「○○銀行」と「○○銀行株式会社」のような表記揺れでフォルダが増えるのを、人の確認で止める）。作成した名前はログに残す
+- 新規作成の後で書き戻し（PATCH）が失敗した書類は、次の試行では作った名前が既存として見える。それでも確認待ちを経ずに `ai-done` へ進まないよう、新規作成した書類 ID を状態ファイル（`created.json`）に記録し、記録がある書類は `ai-review` に回す。記録は書き戻しが成功したとき、または `ai-failed` に移したときに消す（D-009）
 - 発行元・文書タイプが Paperless の自動マッチなどで既に設定されている場合は上書きしない。AI の判定と食い違うときは `ai-review` に回す
 - `created` は日付として解釈でき、未来日でも 30 年以上前でもない場合だけ反映する。それ以外は Paperless が取り込み時に決めた日付を残す
 - 失敗回数は書類 ID ごとにローカルの状態ファイルに記録し、書類に起因する失敗が 3 回で `ai-failed` に移す。利用枠の上限・認証エラー・ネットワーク障害は数えない
@@ -251,7 +252,7 @@ Paperless-ngx 一式と ai-classifier を、TrueNAS の 1 つのカスタムア�
 | `<pool>/paperless/data` | `/usr/src/paperless/data` | インデックス、分類モデル |
 | `<pool>/paperless/pgdata` | PostgreSQL のデータ | メタデータ |
 | `<pool>/paperless/export` | `/usr/src/paperless/export` | `document_exporter` の出力先 |
-| `<pool>/paperless/classifier` | ai-classifier の `/state` | 失敗回数、ログ、ページ整形前の元 PDF（`originals/`） |
+| `<pool>/paperless/classifier` | ai-classifier の `/state` | 失敗回数、新規作成の記録、ログ、ページ整形前の元 PDF（`originals/`） |
 
 **`consume` の共有と権限:**
 

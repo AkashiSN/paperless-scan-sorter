@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from paperless_scan_sorter.failures import FailureStore
+from paperless_scan_sorter.failures import CreatedStore, FailureStore
 
 
 def test_増やして消せる(tmp_path: Path) -> None:
@@ -65,3 +65,34 @@ def test_一時ファイルを残さない(tmp_path: Path) -> None:
     s.increment(2)
     s.clear(1)
     assert [x.name for x in tmp_path.iterdir()] == ["failures.json"]
+
+
+def test_新規作成した書類を記録して消せる(tmp_path: Path) -> None:
+    p = tmp_path / "created.json"
+    s = CreatedStore(p)
+    assert not s.contains(7)
+    s.mark(7)
+    s.mark(7)
+    s.mark(8)
+    assert CreatedStore(p).contains(7)
+    assert json.loads(p.read_text(encoding="utf-8")) == [7, 8]
+    s.clear(7)
+    assert not s.contains(7)
+    assert s.contains(8)
+
+
+@pytest.mark.parametrize("content", ["{壊れ", '{"7": true}', '["7"]', "[true]"])
+def test_新規作成の記録が読めなければ空として扱う(
+    tmp_path: Path, content: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    p = tmp_path / "created.json"
+    p.write_text(content, encoding="utf-8")
+    with caplog.at_level(logging.WARNING):
+        assert not CreatedStore(p).contains(7)
+    assert caplog.records
+
+
+def test_新規作成の記録は一時ファイルを残さない(tmp_path: Path) -> None:
+    s = CreatedStore(tmp_path / "sub" / "created.json")
+    s.mark(1)
+    assert sorted(x.name for x in (tmp_path / "sub").iterdir()) == ["created.json"]
