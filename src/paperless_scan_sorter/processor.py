@@ -1,0 +1,201 @@
+"""ai-todo の書類を 1 周期分処理する。"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import date
+
+from paperless_scan_sorter.claude import ClaudeClient
+from paperless_scan_sorter.decide import Decision, TagIds, decide, failed_tags
+from paperless_scan_sorter.errors import DocumentFailure, ServiceUnavailable
+from paperless_scan_sorter.failures import FailureStore
+from paperless_scan_sorter.paperless import Document, Named, PaperlessClient
+from paperless_scan_sorter.prompt import build_prompt
+from paperless_scan_sorter.tags import REQUIRED_TAGS
+from paperless_scan_sorter.validate import parse_classification
+
+logger = logging.getLogger(__name__)
+
+MAX_FAILURES = 3
+CONTENT_LIMIT = 8000
+MIN_TEXT_CHARS = 100
+
+
+@dataclass
+class CycleResult:
+    """1 周期の集計。"""
+
+    done: int = 0
+    review: int = 0
+    retried: int = 0
+    failed: int = 0
+    aborted: bool = False
+
+
+def resolve_tag_ids(tags: Sequence[Named]) -> TagIds:
+    """状態管理用タグの ID を名前で引く。無いタグがあれば RuntimeError。"""
+    by_name = {t.name: t.id for t in tags}
+    missing = [n for n in REQUIRED_TAGS if n not in by_name]
+    if missing:
+        raise RuntimeError("Paperless に必要なタグが無い: " + ", ".join(missing))
+    return TagIds(
+        inbox=by_name["inbox"],
+        ai_todo=by_name["ai-todo"],
+        ai_done=by_name["ai-done"],
+        ai_review=by_name["ai-review"],
+        ai_failed=by_name["ai-failed"],
+    )
+
+
+def run_cycle(
+    paperless: PaperlessClient,
+    claude: ClaudeClient,
+    store: FailureStore,
+    *,
+    today: date,
+) -> CycleResult:
+    """ai-todo の書類を全件取得してから 1 件ずつ処理する。"""
+    result = CycleResult()
+    try:
+        tags = paperless.tags()
+        correspondents = paperless.correspondents()
+        document_types = paperless.document_types()
+        ids = resolve_tag_ids(tags)
+        docs = paperless.documents_with_tag(ids.ai_todo)
+    except ServiceUnavailable as e:
+        logger.error("周期の準備に失敗したため打ち切る: %s", e)
+        result.aborted = True
+        return result
+
+    tag_names = {t.name: t.id for t in tags}
+    prompt = build_prompt(
+        correspondents=[n.name for n in correspondents],
+        document_types=[n.name for n in document_types],
+        tags=tag_names,
+    )
+
+    for doc in docs:
+        try:
+            decision = _classify(
+                doc,
+                paperless,
+                claude,
+                prompt,
+                correspondents,
+                document_types,
+                tag_names,
+                ids,
+                today,
+            )
+            fields = _fields(decision)
+            paperless.patch_document(doc.id, fields)
+        except ServiceUnavailable as e:
+            logger.error("書類 %d の処理中に利用不可となり周期を打ち切る: %s", doc.id, e)
+            result.aborted = True
+            return result
+        except DocumentFailure as e:
+            try:
+                _on_failure(doc, e, paperless, store, ids, result)
+            except ServiceUnavailable as unavailable:
+                logger.error(
+                    "書類 %d の失敗処理中に利用不可となり周期を打ち切る: %s", doc.id, unavailable
+                )
+                result.aborted = True
+                return result
+            continue
+        store.clear(doc.id)
+        if decision.review:
+            result.review += 1
+            logger.info("書類 %d: review (%s)", doc.id, ", ".join(decision.reasons))
+        else:
+            result.done += 1
+            logger.info("書類 %d: done", doc.id)
+    return result
+
+
+def _classify(
+    doc: Document,
+    paperless: PaperlessClient,
+    claude: ClaudeClient,
+    prompt: str,
+    correspondents: list[Named],
+    document_types: list[Named],
+    tag_names: dict[str, int],
+    ids: TagIds,
+    today: date,
+) -> Decision:
+    """書類を判定し、新規の発行元・文書タイプを作って ID に置き換えた Decision を返す。"""
+    if sum(1 for ch in doc.content if not ch.isspace()) < MIN_TEXT_CHARS:
+        text = claude.classify_pdf(prompt, paperless.download_original(doc.id))
+    else:
+        text = claude.classify_text(prompt, doc.content[:CONTENT_LIMIT])
+    classification = parse_classification(text, known_tags=tag_names.keys(), today=today)
+    decision = decide(
+        doc,
+        classification,
+        correspondents=correspondents,
+        document_types=document_types,
+        tag_names=tag_names,
+        ids=ids,
+    )
+    correspondent = decision.correspondent
+    if isinstance(correspondent, str):
+        created = paperless.create_correspondent(correspondent)
+        correspondents.append(created)
+        logger.info("発行元を新規作成: %s", created.name)
+        correspondent = created.id
+    document_type = decision.document_type
+    if isinstance(document_type, str):
+        created = paperless.create_document_type(document_type)
+        document_types.append(created)
+        logger.info("文書タイプを新規作成: %s", created.name)
+        document_type = created.id
+    return Decision(
+        title=decision.title,
+        correspondent=correspondent,
+        document_type=document_type,
+        created=decision.created,
+        tags=decision.tags,
+        review=decision.review,
+        reasons=decision.reasons,
+    )
+
+
+def _fields(decision: Decision) -> dict[str, object]:
+    """PATCH するフィールド。None の項目は送らない。"""
+    fields: dict[str, object] = {"tags": sorted(decision.tags)}
+    if decision.title is not None:
+        fields["title"] = decision.title
+    if decision.correspondent is not None:
+        fields["correspondent"] = decision.correspondent
+    if decision.document_type is not None:
+        fields["document_type"] = decision.document_type
+    if decision.created is not None:
+        fields["created"] = decision.created.isoformat()
+    return fields
+
+
+def _on_failure(
+    doc: Document,
+    error: DocumentFailure,
+    paperless: PaperlessClient,
+    store: FailureStore,
+    ids: TagIds,
+    result: CycleResult,
+) -> None:
+    """失敗を数え、上限に達したら ai-failed にする。"""
+    count = store.increment(doc.id)
+    if count < MAX_FAILURES:
+        result.retried += 1
+        logger.info("書類 %d: retry (%d/%d) %s", doc.id, count, MAX_FAILURES, error)
+        return
+    try:
+        paperless.patch_document(doc.id, {"tags": sorted(failed_tags(doc, ids))})
+    except DocumentFailure as e:
+        logger.warning("書類 %d: ai-failed への付け替えに失敗: %s", doc.id, e)
+    else:
+        store.clear(doc.id)
+    result.failed += 1
+    logger.info("書類 %d: failed", doc.id)
