@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
@@ -11,6 +12,20 @@ import httpx
 from paperless_scan_sorter.errors import DocumentFailure, ServiceUnavailable
 
 _PAGE_SIZE = 100
+
+
+@contextmanager
+def _parsing(method: str, path: str) -> Iterator[None]:
+    """成功応答の読み取りで形が違えば ServiceUnavailable にする。
+
+    応答の形が違うのは書類ではなく Paperless かその手前（リバースプロキシなど）の
+    問題なので、書類を数えずに周期を打ち切る。メッセージには応答本文を入れない。
+    """
+    try:
+        yield
+    except ValueError, KeyError, TypeError, AttributeError:
+        label_path = path.split("?", 1)[0]
+        raise ServiceUnavailable(f"{method} {label_path}: 応答の形式が不正") from None
 
 
 @dataclass(frozen=True)
@@ -59,18 +74,20 @@ class PaperlessClient:
 
     def documents_with_tag(self, tag_id: int) -> list[Document]:
         """タグを持つ書類を全ページ集めてから返す。"""
-        rows = self._list_all("/api/documents/", {"tags__id__all": tag_id, "page_size": _PAGE_SIZE})
-        return [
-            Document(
-                id=r["id"],
-                title=r["title"],
-                content=r.get("content") or "",
-                correspondent=r.get("correspondent"),
-                document_type=r.get("document_type"),
-                tags=frozenset(r["tags"]),
-            )
-            for r in rows
-        ]
+        path = "/api/documents/"
+        rows = self._list_all(path, {"tags__id__all": tag_id, "page_size": _PAGE_SIZE})
+        with _parsing("GET", path):
+            return [
+                Document(
+                    id=r["id"],
+                    title=r["title"],
+                    content=r.get("content") or "",
+                    correspondent=r.get("correspondent"),
+                    document_type=r.get("document_type"),
+                    tags=frozenset(r["tags"]),
+                )
+                for r in rows
+            ]
 
     def tags(self) -> list[Named]:
         return self._named("/api/tags/")
@@ -98,11 +115,14 @@ class PaperlessClient:
 
     def _named(self, path: str) -> list[Named]:
         rows = self._list_all(path, {"page_size": _PAGE_SIZE})
-        return [Named(r["id"], r["name"]) for r in rows]
+        with _parsing("GET", path):
+            return [Named(r["id"], r["name"]) for r in rows]
 
     def _create(self, path: str, name: str) -> Named:
-        body = self._request("POST", path, document_scoped=True, json={"name": name}).json()
-        return Named(body["id"], body["name"])
+        response = self._request("POST", path, document_scoped=True, json={"name": name})
+        with _parsing("POST", path):
+            body = response.json()
+            return Named(body["id"], body["name"])
 
     def _list_all(self, path: str, params: dict[str, object]) -> list[dict]:
         """next を辿って全ページを集める。
@@ -113,13 +133,14 @@ class PaperlessClient:
         rows: list[dict] = []
         response = self._request("GET", path, params=params)
         while True:
-            body = response.json()
-            rows.extend(body["results"])
-            next_url = body.get("next")
-            if not next_url:
-                return rows
-            parts = urlsplit(next_url)
-            target = parts.path + (f"?{parts.query}" if parts.query else "")
+            with _parsing("GET", path):
+                body = response.json()
+                rows.extend(body["results"])
+                next_url = body.get("next")
+                if not next_url:
+                    return rows
+                parts = urlsplit(next_url)
+                target = parts.path + (f"?{parts.query}" if parts.query else "")
             response = self._request("GET", target)
 
     def _request(

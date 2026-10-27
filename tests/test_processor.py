@@ -350,3 +350,41 @@ def test_発行元の作成が400でも次の書類を処理する(store: Failur
     assert store.count(100) == 1
     assert 100 not in server.patches
     assert 101 in server.patches
+
+
+class RaisingFirstClaude(FakeClaude):
+    """1 回目の呼び出しだけ例外を送出する偽の claude。"""
+
+    def __init__(self, error: Exception, *outputs: str) -> None:
+        super().__init__(*outputs)
+        self.error = error
+
+    def __call__(
+        self,
+        argv: Sequence[str],
+        stdin: str | None,
+        cwd: Path,
+        env: Mapping[str, str],
+        timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+        if not self.calls:
+            self.calls.append({"argv": list(argv), "stdin": stdin})
+            raise self.error
+        return super().__call__(argv, stdin, cwd, env, timeout)
+
+
+def test_想定外の例外は書類の失敗として数え次の書類へ進む(
+    store: FailureStore, caplog: pytest.LogCaptureFixture
+) -> None:
+    server = FakePaperless([_doc(100), _doc(101)])
+    error = UnicodeEncodeError("utf-8", "秘密の本文", 0, 1, "surrogates not allowed")
+    claude = RaisingFirstClaude(error, ok(_answer()))
+    with caplog.at_level(logging.INFO):
+        r = run_cycle(server.client(), claude.client(), store, today=TODAY)
+    assert r == CycleResult(done=1, retried=1)
+    assert store.count(100) == 1
+    assert 101 in server.patches
+    text = "\n".join(rec.getMessage() for rec in caplog.records)
+    assert "UnicodeEncodeError" in text
+    assert "秘密の本文" not in text
+    assert all(rec.exc_info is None for rec in caplog.records)

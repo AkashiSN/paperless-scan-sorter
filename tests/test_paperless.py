@@ -209,3 +209,33 @@ def test_例外にトークンを含めない() -> None:
         client.tags()
     assert "secret" not in str(e.value)
     assert "401" in str(e.value)
+
+
+def test_作成の応答がJSONでなければ周期を止める() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html>秘密の本文</html>")
+
+    with pytest.raises(ServiceUnavailable) as e:
+        make_client(handler).create_correspondent("x")
+    assert str(e.value) == "POST /api/correspondents/: 応答の形式が不正"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [{"results": [{"name": "x"}], "next": None}, {"next": None}, [1, 2], {"results": [1]}],
+)
+def test_一覧の応答の形が違えば周期を止める(body: object) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=body)
+
+    with pytest.raises(ServiceUnavailable) as e:
+        make_client(handler).tags()
+    assert str(e.value) == "GET /api/tags/: 応答の形式が不正"
+
+
+def test_書類一覧の応答の形が違えば周期を止める() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"results": [{"id": 1}], "next": None})
+
+    with pytest.raises(ServiceUnavailable):
+        make_client(handler).documents_with_tag(2)

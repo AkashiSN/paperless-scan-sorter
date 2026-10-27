@@ -95,9 +95,16 @@ def run_cycle(
             logger.error("書類 %d の処理中に利用不可となり周期を打ち切る: %s", doc.id, e)
             result.aborted = True
             return result
-        except DocumentFailure as e:
+        except Exception as e:
+            if isinstance(e, DocumentFailure):
+                failure = e
+            else:
+                # 想定外の例外も書類の失敗として数え、1 件で列全体を止めない。
+                # メッセージや traceback には本文が混ざりうるので、型名だけを残す。
+                logger.error("書類 %d の処理中に想定外の例外: %s", doc.id, type(e).__name__)
+                failure = DocumentFailure(f"想定外の例外 ({type(e).__name__})")
             try:
-                _on_failure(doc, e, paperless, store, ids, result)
+                _on_failure(doc, failure, paperless, store, ids, result)
             except ServiceUnavailable as unavailable:
                 logger.error(
                     "書類 %d の失敗処理中に利用不可となり周期を打ち切る: %s", doc.id, unavailable
