@@ -83,10 +83,10 @@ def make(rec: Callable[..., object], **kw: object) -> ClaudeClient:
     return ClaudeClient(model="sonnet", runner=rec, env={"PATH": "/bin"}, **kw)  # type: ignore[arg-type]
 
 
-# 両経路に共通する、ツール・設定・MCP を閉じる引数。
+# 両経路に共通する、履歴・ツール・設定・MCP を閉じる引数。
 LOCKDOWN = [
-    "--permission-mode", "dontAsk", "--setting-sources", "", "--strict-mcp-config",
-    "--restricted",
+    "--no-session-persistence", "--permission-mode", "dontAsk",
+    "--setting-sources", "", "--strict-mcp-config", "--restricted",
 ]  # fmt: skip
 
 
@@ -99,6 +99,14 @@ def test_本文はstdinで渡しツールを許可しない() -> None:
         "--output-format", "json", *LOCKDOWN, "--tools", "", "--", "プロンプト",
     ]  # fmt: skip
     assert rec.stdin == "本文"
+
+
+def test_両経路ともセッションをディスクに残さない() -> None:
+    rec = Recorder()
+    make(rec).classify_text("p", "c")
+    assert "--no-session-persistence" in rec.argv
+    make(rec).classify_pdf("p", b"%PDF")
+    assert "--no-session-persistence" in rec.argv
 
 
 def test_プロンプトは区切りの後に置き可変長の引数に飲まれない() -> None:

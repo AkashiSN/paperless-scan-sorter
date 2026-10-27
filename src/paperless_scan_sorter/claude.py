@@ -18,16 +18,18 @@ logger = logging.getLogger(__name__)
 # claude が使わないうえ、書類の本文に誘導されて漏れる経路を残さないため。
 _DROPPED_ENV = frozenset({"ANTHROPIC_API_KEY", "PAPERLESS_TOKEN", "PAPERLESS_TOKEN_FILE"})
 
-# 両経路に共通する引数。書類からの指示で許可外のツールが動かないよう、
+# 両経路に共通する引数。
+# - --no-session-persistence: 本文・PDF の読み取り結果・応答を ~/.claude の履歴に残さない
 # - dontAsk: 事前に許可していない操作は確認せずに拒否する
 # - --setting-sources "": ユーザー・プロジェクト・ローカルの設定ファイルを読まない
 # - --strict-mcp-config: --mcp-config を渡さないので、MCP サーバーを 1 つも使わない
 # - --restricted: ファイル系ツールを作業ディレクトリ内に閉じ、bypassPermissions を拒む
+# 後ろ 4 つは書類からの指示で許可外のツールが動かないようにするためのもの。
 # 使えるツールの集合そのものは各経路の --tools で決める（--allowedTools は許可ルールで、
 # 集合を狭めない）。
 _LOCKDOWN_ARGS = (
-    "--permission-mode", "dontAsk", "--setting-sources", "", "--strict-mcp-config",
-    "--restricted",
+    "--no-session-persistence", "--permission-mode", "dontAsk",
+    "--setting-sources", "", "--strict-mcp-config", "--restricted",
 )  # fmt: skip
 
 # (argv, stdin_text, cwd, env, timeout)

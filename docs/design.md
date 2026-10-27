@@ -171,17 +171,18 @@ Claude Code は「本文を読んで JSON を返す」だけを担当し、Paper
 
 ```bash
 # 通常（本文テキストを渡す）。ツールは 1 つも使わせない
-claude -p --model sonnet --max-turns 1 --output-format json \
+claude -p --model sonnet --max-turns 1 --output-format json --no-session-persistence \
   --permission-mode dontAsk --setting-sources "" --strict-mcp-config --restricted \
   --tools "" -- "<プロンプト>" < 本文テキスト
 
 # OCR が崩れている書類（PDF を直接読ませる）。使えるのは Read だけ
-claude -p --model sonnet --max-turns 3 --output-format json \
+claude -p --model sonnet --max-turns 3 --output-format json --no-session-persistence \
   --permission-mode dontAsk --setting-sources "" --strict-mcp-config --restricted \
   --tools Read --allowedTools "Read(//work/doc.pdf)" -- "<プロンプト>"
 ```
 
 - ツールの制限: `--allowedTools` は確認なしで許可する権限ルールで、使えるツールの集合は狭めない。集合は `--tools` で決め、本文は `""`（ツールなし）、PDF は `Read` だけにする。`--permission-mode dontAsk` で事前に許可していない操作は確認せずに拒否し、`--setting-sources ""` でユーザー・プロジェクト・ローカルの設定ファイルを読まず、`--strict-mcp-config` を `--mcp-config` なしで付けて MCP サーバーを使わない。`--restricted` はファイル系ツールを作業ディレクトリ内に閉じ、`bypassPermissions` を拒む
+- 履歴: `--no-session-persistence` で、本文・PDF の読み取り結果・応答を `~/.claude` のセッション履歴に残さない（書類の内容をログや状態に残さない方針と同じ）
 - `--tools` と `--allowedTools` は可変長の引数で、後ろの位置引数まで飲み込む。プロンプトは必ず `--` の後に置く
 
 - 認証: PC で `claude setup-token` を実行し、発行されたトークンを `CLAUDE_CODE_OAUTH_TOKEN` に設定する（有効期間は約 1 年）。`ANTHROPIC_API_KEY` は設定しない。`claude` の子プロセスには `ANTHROPIC_API_KEY`・`PAPERLESS_TOKEN`・`PAPERLESS_TOKEN_FILE` を渡さない
