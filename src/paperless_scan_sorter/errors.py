@@ -12,3 +12,7 @@ class ServiceUnavailable(Exception):
 
     失敗回数には数えず、その周期を打ち切る。
     """
+
+
+class MissingTagsError(Exception):
+    """Paperless に状態管理用のタグがそろっていない。設定の見直しが要るので常駐を止める。"""

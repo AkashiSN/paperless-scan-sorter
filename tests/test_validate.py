@@ -137,3 +137,9 @@ def test_閏日の30年前は2月28日() -> None:
     assert c.created is None
     c = parse_classification(_j(created="1994-03-01"), known_tags=KNOWN, today=today)
     assert c.created == date(1994, 3, 1)
+
+
+def test_入れ子が深すぎるJSONは書類起因の失敗() -> None:
+    text = '{"a": ' + "[" * 100000
+    with pytest.raises(DocumentFailure):
+        parse_classification(text, known_tags=KNOWN, today=TODAY)

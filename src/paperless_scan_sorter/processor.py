@@ -9,7 +9,7 @@ from datetime import date
 
 from paperless_scan_sorter.claude import ClaudeClient
 from paperless_scan_sorter.decide import Decision, TagIds, decide, failed_tags
-from paperless_scan_sorter.errors import DocumentFailure, ServiceUnavailable
+from paperless_scan_sorter.errors import DocumentFailure, MissingTagsError, ServiceUnavailable
 from paperless_scan_sorter.failures import FailureStore
 from paperless_scan_sorter.paperless import Document, Named, PaperlessClient
 from paperless_scan_sorter.prompt import build_prompt
@@ -35,11 +35,11 @@ class CycleResult:
 
 
 def resolve_tag_ids(tags: Sequence[Named]) -> TagIds:
-    """状態管理用タグの ID を名前で引く。無いタグがあれば RuntimeError。"""
+    """状態管理用タグの ID を名前で引く。無いタグがあれば MissingTagsError。"""
     by_name = {t.name: t.id for t in tags}
     missing = [n for n in REQUIRED_TAGS if n not in by_name]
     if missing:
-        raise RuntimeError("Paperless に必要なタグが無い: " + ", ".join(missing))
+        raise MissingTagsError("Paperless に必要なタグが無い: " + ", ".join(missing))
     return TagIds(
         inbox=by_name["inbox"],
         ai_todo=by_name["ai-todo"],

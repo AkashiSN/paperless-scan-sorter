@@ -94,6 +94,9 @@ def _extract_object(text: str) -> dict[str, object]:
         obj, _ = json.JSONDecoder().raw_decode(text, start)
     except ValueError as exc:
         raise DocumentFailure("出力の JSON を読めない") from exc
+    except RecursionError:
+        # 入れ子が深すぎる出力。周期ごと落ちないよう書類起因の失敗として扱う。
+        raise DocumentFailure("出力の JSON の入れ子が深すぎる") from None
     if not isinstance(obj, dict):
         raise DocumentFailure("出力の JSON がオブジェクトではない")
     return obj

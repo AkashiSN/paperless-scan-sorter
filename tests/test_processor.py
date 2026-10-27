@@ -13,6 +13,7 @@ import httpx
 import pytest
 
 from paperless_scan_sorter.claude import ClaudeClient
+from paperless_scan_sorter.errors import MissingTagsError
 from paperless_scan_sorter.failures import FailureStore
 from paperless_scan_sorter.paperless import Named, PaperlessClient
 from paperless_scan_sorter.processor import (
@@ -313,7 +314,7 @@ def test_ログに書類IDと結果を出し本文とタイトルは出さない
 
 def test_必須タグが無ければ止める() -> None:
     tags = [Named(1, "inbox"), Named(2, "ai-todo"), Named(3, "ai-done")]
-    with pytest.raises(RuntimeError) as e:
+    with pytest.raises(MissingTagsError) as e:
         resolve_tag_ids(tags)
     assert "ai-failed" in str(e.value)
     assert "ai-review" in str(e.value)

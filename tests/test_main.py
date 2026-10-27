@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from paperless_scan_sorter import __main__ as app
+from paperless_scan_sorter.errors import MissingTagsError
 from paperless_scan_sorter.processor import CycleResult
 
 
@@ -51,7 +52,7 @@ def test_必須タグが無ければ1で終わる(monkeypatch: pytest.MonkeyPatc
     def fake(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
         nonlocal calls
         calls += 1
-        raise RuntimeError("Paperless に必要なタグが無い: ai-todo")
+        raise MissingTagsError("Paperless に必要なタグが無い: ai-todo")
 
     monkeypatch.setattr(app, "run_cycle", fake)
     assert app.main([]) == 1
@@ -77,6 +78,25 @@ def test_常駐ループは例外でも次の周期へ進み停止要求で終�
         calls += 1
         if calls == 1:
             raise ValueError("bug")
+        app.request_stop()
+        return CycleResult()
+
+    monkeypatch.setattr(app, "run_cycle", fake)
+    assert app.main([]) == 0
+    assert calls == 2
+
+
+def test_RuntimeErrorは必須タグ不足として扱わない(
+    monkeypatch: pytest.MonkeyPatch, env: None
+) -> None:
+    monkeypatch.setenv("INTERVAL", "1")
+    calls = 0
+
+    def fake(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RecursionError("deep")
         app.request_stop()
         return CycleResult()
 
