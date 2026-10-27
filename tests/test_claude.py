@@ -191,3 +191,36 @@ def test_実行ファイルとタイムアウトを渡す() -> None:
     ).classify_text("p", "c")
     assert rec.argv[0] == "/opt/claude"
     assert rec.calls[-1]["timeout"] == 12.5
+
+
+def _error(result: object, subtype: str = "success") -> str:
+    return json.dumps({"is_error": True, "subtype": subtype, "result": result})
+
+
+@pytest.mark.parametrize("message", ["Prompt is too long", "API Error: prompt is too long: 1 > 2"])
+def test_プロンプトが長すぎるエラーは書類起因の失敗(message: str) -> None:
+    with pytest.raises(DocumentFailure):
+        make(Recorder(stdout=_error(message))).classify_text("p", "c")
+
+
+def test_PDFでもプロンプトが長すぎるエラーは書類起因の失敗() -> None:
+    with pytest.raises(DocumentFailure):
+        make(Recorder(stdout=_error("Prompt is too long"))).classify_pdf("p", b"%PDF")
+
+
+def test_PDFでも利用枠のエラーは周期を止める() -> None:
+    with pytest.raises(ServiceUnavailable):
+        make(Recorder(stdout=_error("usage limit reached"))).classify_pdf("p", b"%PDF")
+
+
+def test_エラーのresultは先頭200文字だけログに出す(caplog: pytest.LogCaptureFixture) -> None:
+    message = "Invalid API key" + "x" * 300
+    with pytest.raises(ServiceUnavailable):
+        make(Recorder(stdout=_error(message))).classify_text("p", "c")
+    assert message[:200] in caplog.text
+    assert message[:201] not in caplog.text
+
+
+def test_エラーのresultが文字列でなくても周期を止める() -> None:
+    with pytest.raises(ServiceUnavailable):
+        make(Recorder(stdout=_error(None))).classify_text("p", "c")

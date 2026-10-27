@@ -105,7 +105,18 @@ class ClaudeClient:
         if data.get("is_error"):
             if data.get("subtype") == "error_max_turns":
                 raise DocumentFailure("claude がターン上限に達した")
-            logger.error("claude がエラーを返した: subtype=%s", data.get("subtype"))
+            # is_error のときの result は CLI のエラーメッセージで、原因の切り分けに要る。
+            message = data.get("result")
+            message = message if isinstance(message, str) else ""
+            logger.error(
+                "claude がエラーを返した: subtype=%s result=%s",
+                data.get("subtype"),
+                message[:200],
+            )
+            # 書類が長すぎるエラーは書類を変えない限り繰り返すので、書類起因として数える。
+            # それ以外（利用枠・認証・未知のエラー）は数えずに周期を打ち切る（D-008）。
+            if "prompt is too long" in message.lower():
+                raise DocumentFailure("claude の入力が長すぎる")
             raise ServiceUnavailable("claude がエラーを返した（利用枠・認証など）")
 
         result = data.get("result")

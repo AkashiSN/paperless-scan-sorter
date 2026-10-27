@@ -18,6 +18,7 @@ from paperless_scan_sorter.failures import FailureStore
 from paperless_scan_sorter.paperless import Named, PaperlessClient
 from paperless_scan_sorter.processor import (
     CONTENT_LIMIT,
+    MAX_PDF_BYTES,
     CycleResult,
     resolve_tag_ids,
     run_cycle,
@@ -51,6 +52,7 @@ class FakePaperless:
         self.patches: dict[int, dict] = {}
         self.posts: list[tuple[str, dict]] = []
         self.downloads: list[int] = []
+        self.pdf = b"%PDF-fake"
         self.patch_status: dict[int, int] = {}
         self.post_status: dict[str, int] = {}
         self.list_status: int | None = None
@@ -87,7 +89,7 @@ class FakePaperless:
             return self._page(self.type_rows)
         if method == "GET" and path.endswith("/download/"):
             self.downloads.append(int(path.split("/")[3]))
-            return httpx.Response(200, content=b"%PDF-fake")
+            return httpx.Response(200, content=self.pdf)
         if method == "PATCH":
             doc_id = int(path.split("/")[3])
             if doc_id in self.patch_status:
@@ -388,3 +390,15 @@ def test_想定外の例外は書類の失敗として数え次の書類へ進�
     assert "UnicodeEncodeError" in text
     assert "秘密の本文" not in text
     assert all(rec.exc_info is None for rec in caplog.records)
+
+
+def test_大きすぎるPDFはclaudeに渡さず書類の失敗にする(store: FailureStore) -> None:
+    assert MAX_PDF_BYTES == 20 * 1024 * 1024
+    server = FakePaperless([_doc(100, content=""), _doc(101)])
+    server.pdf = b"%" * (MAX_PDF_BYTES + 1)
+    claude = FakeClaude(ok(_answer()))
+    r = run_cycle(server.client(), claude.client(), store, today=TODAY)
+    assert r == CycleResult(done=1, retried=1)
+    assert store.count(100) == 1
+    assert len(claude.calls) == 1
+    assert "--allowedTools" not in claude.calls[0]["argv"]

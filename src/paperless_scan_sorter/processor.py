@@ -21,6 +21,8 @@ logger = logging.getLogger(__name__)
 MAX_FAILURES = 3
 CONTENT_LIMIT = 8000
 MIN_TEXT_CHARS = 100
+# claude に読ませる PDF の上限。これを超える書類は読ませずに書類の失敗にする（D-008）。
+MAX_PDF_BYTES = 20 * 1024 * 1024
 
 
 @dataclass
@@ -135,7 +137,10 @@ def _classify(
 ) -> Decision:
     """書類を判定し、新規の発行元・文書タイプを作って ID に置き換えた Decision を返す。"""
     if sum(1 for ch in doc.content if not ch.isspace()) < MIN_TEXT_CHARS:
-        text = claude.classify_pdf(prompt, paperless.download_original(doc.id))
+        pdf = paperless.download_original(doc.id)
+        if len(pdf) > MAX_PDF_BYTES:
+            raise DocumentFailure(f"PDF が大きすぎる ({len(pdf)} bytes)")
+        text = claude.classify_pdf(prompt, pdf)
     else:
         text = claude.classify_text(prompt, doc.content[:CONTENT_LIMIT])
     classification = parse_classification(text, known_tags=tag_names.keys(), today=today)
