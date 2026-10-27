@@ -83,15 +83,30 @@ def make(rec: Callable[..., object], **kw: object) -> ClaudeClient:
     return ClaudeClient(model="sonnet", runner=rec, env={"PATH": "/bin"}, **kw)  # type: ignore[arg-type]
 
 
+# 両経路に共通する、ツール・設定・MCP を閉じる引数。
+LOCKDOWN = [
+    "--permission-mode", "dontAsk", "--setting-sources", "", "--strict-mcp-config",
+    "--restricted",
+]  # fmt: skip
+
+
 def test_本文はstdinで渡しツールを許可しない() -> None:
     rec = Recorder()
     out = make(rec).classify_text("プロンプト", "本文")
     assert out == "{}"
     assert rec.argv == [
         "claude", "-p", "--model", "sonnet", "--max-turns", "1",
-        "--output-format", "json", "プロンプト",
+        "--output-format", "json", *LOCKDOWN, "--tools", "", "--", "プロンプト",
     ]  # fmt: skip
     assert rec.stdin == "本文"
+
+
+def test_プロンプトは区切りの後に置き可変長の引数に飲まれない() -> None:
+    rec = Recorder()
+    make(rec).classify_text("-p から始まる文", "c")
+    assert rec.argv[-2:] == ["--", "-p から始まる文"]
+    make(rec).classify_pdf("-p から始まる文", b"%PDF")
+    assert rec.argv[-2:] == ["--", "-p から始まる文"]
 
 
 def test_作業ディレクトリは毎回空の一時ディレクトリ() -> None:
@@ -132,7 +147,8 @@ def test_PDFはそのファイルだけ読ませる() -> None:
     pdf = rec.cwd / "doc.pdf"
     assert rec.argv == [
         "claude", "-p", "--model", "sonnet", "--max-turns", "3",
-        "--output-format", "json", "--allowedTools", f"Read(/{pdf})", "p",
+        "--output-format", "json", *LOCKDOWN, "--tools", "Read",
+        "--allowedTools", f"Read(/{pdf})", "--", "p",
     ]  # fmt: skip
     # 権限ルールの `/path` は設定ディレクトリからの相対で、絶対パスは `//path` と書く。
     rule = rec.argv[rec.argv.index("--allowedTools") + 1]

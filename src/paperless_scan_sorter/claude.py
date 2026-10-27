@@ -18,6 +18,18 @@ logger = logging.getLogger(__name__)
 # claude が使わないうえ、書類の本文に誘導されて漏れる経路を残さないため。
 _DROPPED_ENV = frozenset({"ANTHROPIC_API_KEY", "PAPERLESS_TOKEN", "PAPERLESS_TOKEN_FILE"})
 
+# 両経路に共通する引数。書類からの指示で許可外のツールが動かないよう、
+# - dontAsk: 事前に許可していない操作は確認せずに拒否する
+# - --setting-sources "": ユーザー・プロジェクト・ローカルの設定ファイルを読まない
+# - --strict-mcp-config: --mcp-config を渡さないので、MCP サーバーを 1 つも使わない
+# - --restricted: ファイル系ツールを作業ディレクトリ内に閉じ、bypassPermissions を拒む
+# 使えるツールの集合そのものは各経路の --tools で決める（--allowedTools は許可ルールで、
+# 集合を狭めない）。
+_LOCKDOWN_ARGS = (
+    "--permission-mode", "dontAsk", "--setting-sources", "", "--strict-mcp-config",
+    "--restricted",
+)  # fmt: skip
+
 # (argv, stdin_text, cwd, env, timeout)
 type Runner = Callable[
     [Sequence[str], str | None, Path, Mapping[str, str], float],
@@ -65,11 +77,13 @@ class ClaudeClient:
         self._env = {k: v for k, v in source.items() if k not in _DROPPED_ENV}
 
     def classify_text(self, prompt: str, content: str) -> str:
-        """本文を stdin で渡す。ツールは許可しない。"""
+        """本文を stdin で渡す。ツールは 1 つも使わせない。"""
         with tempfile.TemporaryDirectory() as tmp:
+            # --tools は可変長の引数なので、プロンプトは `--` の後に置いて飲まれないようにする。
             argv = [
                 self._executable, "-p", "--model", self._model,
-                "--max-turns", "1", "--output-format", "json", prompt,
+                "--max-turns", "1", "--output-format", "json", *_LOCKDOWN_ARGS,
+                "--tools", "", "--", prompt,
             ]  # fmt: skip
             return self._run(argv, content, Path(tmp))
 
@@ -79,11 +93,12 @@ class ClaudeClient:
             path = Path(tmp).resolve() / "doc.pdf"
             path.write_bytes(pdf)
             # 権限ルールの `/path` は設定ディレクトリからの相対になる。絶対パスは
-            # `//path` と書くので、絶対パスの前にもう 1 つ `/` を付ける。
+            # `//path` と書くので、絶対パスの前にもう 1 つ `/` を付ける。使えるツールは
+            # --tools で Read だけにし、--allowedTools でそのファイルの読み取りだけを許可する。
             argv = [
                 self._executable, "-p", "--model", self._model,
-                "--max-turns", "3", "--output-format", "json",
-                "--allowedTools", f"Read(/{path})", prompt,
+                "--max-turns", "3", "--output-format", "json", *_LOCKDOWN_ARGS,
+                "--tools", "Read", "--allowedTools", f"Read(/{path})", "--", prompt,
             ]  # fmt: skip
             return self._run(argv, None, path.parent)
 

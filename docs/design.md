@@ -165,18 +165,24 @@ Paperless の書類詳細画面で、回転・ページ削除・並べ替え・�
 
 ## 7. AI 分類器（Claude Code）詳細設計
 
-Claude Code は「本文を読んで JSON を返す」だけを担当し、Paperless の操作はすべてスクリプト側で行う。空の作業ディレクトリで、書き込み系のツールを許可せずに動かすので、LLM がファイルや API を直接変更することはない（`-p` では許可していないツールの呼び出しは拒否される）。
+Claude Code は「本文を読んで JSON を返す」だけを担当し、Paperless の操作はすべてスクリプト側で行う。空の作業ディレクトリで、使えるツールを `--tools` で絞って動かすので、LLM がファイルや API を直接変更することはない。
 
 ### 呼び出し方
 
 ```bash
-# 通常（本文テキストを渡す）
-claude -p --model sonnet --max-turns 1 --output-format json "<プロンプト>" < 本文テキスト
+# 通常（本文テキストを渡す）。ツールは 1 つも使わせない
+claude -p --model sonnet --max-turns 1 --output-format json \
+  --permission-mode dontAsk --setting-sources "" --strict-mcp-config --restricted \
+  --tools "" -- "<プロンプト>" < 本文テキスト
 
-# OCR が崩れている書類（PDF を直接読ませる）
+# OCR が崩れている書類（PDF を直接読ませる）。使えるのは Read だけ
 claude -p --model sonnet --max-turns 3 --output-format json \
-  --allowedTools "Read(//work/doc.pdf)" "<プロンプト>"
+  --permission-mode dontAsk --setting-sources "" --strict-mcp-config --restricted \
+  --tools Read --allowedTools "Read(//work/doc.pdf)" -- "<プロンプト>"
 ```
+
+- ツールの制限: `--allowedTools` は確認なしで許可する権限ルールで、使えるツールの集合は狭めない。集合は `--tools` で決め、本文は `""`（ツールなし）、PDF は `Read` だけにする。`--permission-mode dontAsk` で事前に許可していない操作は確認せずに拒否し、`--setting-sources ""` でユーザー・プロジェクト・ローカルの設定ファイルを読まず、`--strict-mcp-config` を `--mcp-config` なしで付けて MCP サーバーを使わない。`--restricted` はファイル系ツールを作業ディレクトリ内に閉じ、`bypassPermissions` を拒む
+- `--tools` と `--allowedTools` は可変長の引数で、後ろの位置引数まで飲み込む。プロンプトは必ず `--` の後に置く
 
 - 認証: PC で `claude setup-token` を実行し、発行されたトークンを `CLAUDE_CODE_OAUTH_TOKEN` に設定する（有効期間は約 1 年）。`ANTHROPIC_API_KEY` は設定しない。`claude` の子プロセスには `ANTHROPIC_API_KEY`・`PAPERLESS_TOKEN`・`PAPERLESS_TOKEN_FILE` を渡さない
 - モデル: 分類は Sonnet で十分。利用枠を節約したい場合は Haiku に切り替える
