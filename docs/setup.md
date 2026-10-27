@@ -18,11 +18,20 @@ cp .env.example .env
 
 `PAPERLESS_TOKEN` と `CLAUDE_CODE_OAUTH_TOKEN` は、手順 3 と 4 で発行してから入れる。`.env` は追跡しない。
 
-`$PAPERLESS_ROOT` の下に `consume`・`media`・`data`・`export`・`pgdata`・`classifier` を作る。ai-classifier はコンテナ内で UID/GID 1000 として動くので、`classifier` はそのユーザーが書き込めるようにする。
+`PAPERLESS_ROOT` の下に `consume`・`media`・`data`・`export`・`pgdata`・`classifier` を作る。ai-classifier はコンテナ内で UID/GID 1000 として動くので、`classifier` はそのユーザーが書き込めるようにする。
+
+`.env` を編集してもシェルの変数にはならないので、`PAPERLESS_ROOT` の行だけを `.env` から読み出し、空・`/`・プレースホルダーのままの値を拒んでからディレクトリを作る。`.env` を `.` や `source` でシェルに読み込まない。`<pool>` が残っていると `<` と `>` がリダイレクトとして実行され、root のシェルではルート直下にファイルを作ってしまう。`.env` の `PAPERLESS_ROOT` は引用符で囲まずに書く。bash と zsh のどちらにもそのまま貼り付けられる。
 
 ```bash
-mkdir -p "$PAPERLESS_ROOT"/{consume,media,data,export,pgdata,classifier}
-chown 1000:1000 "$PAPERLESS_ROOT/classifier"
+PAPERLESS_ROOT=$(sed -n 's/^PAPERLESS_ROOT=//p' .env | tail -n 1)
+: "${PAPERLESS_ROOT:?PAPERLESS_ROOT を .env に設定する}"
+case "$PAPERLESS_ROOT" in
+  *'<'* | *'>'*) echo "PAPERLESS_ROOT のプレースホルダー（<pool> など）を書き換える: $PAPERLESS_ROOT" >&2 ;;
+  /*[!/]*)
+    mkdir -p "$PAPERLESS_ROOT"/{consume,media,data,export,pgdata,classifier} &&
+      chown 1000:1000 "$PAPERLESS_ROOT/classifier" ;;
+  *) echo "PAPERLESS_ROOT は / 以外の絶対パスにする: '$PAPERLESS_ROOT'" >&2 ;;
+esac
 ```
 
 Paperless だけ先に起動し、管理者ユーザーを作る。
