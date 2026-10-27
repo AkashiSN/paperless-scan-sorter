@@ -21,5 +21,17 @@
         "dependency-groups"
       ]
     }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Dockerfile の `# renovate:` コメント付き ARG（Claude Code の版）を上げる。コメントが無いと Renovate は ARG の値を依存として読まない。",
+      "managerFilePatterns": [
+        "/(^|/)Dockerfile$/"
+      ],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)\\s+ARG \\S+=(?<currentValue>\\S+)"
+      ]
+    }
   ]
 }
