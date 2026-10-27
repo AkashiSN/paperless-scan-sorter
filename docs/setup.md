@@ -12,7 +12,8 @@ cp .env.example .env
 
 - `PAPERLESS_ROOT`: データ置き場（例: `/mnt/<pool>/paperless`）
 - `PAPERLESS_SECRET_KEY`、`DB_PASSWORD`: 乱数で作った長い文字列
-- `TZ`: 利用者のタイムゾーン（IANA 名）
+- `TZ`: 利用者のタイムゾーン（IANA 名）。Paperless と ai-classifier の両方に渡す。ai-classifier は `created` の範囲（未来日でないか）をこのタイムゾーンの今日で判定する
+- `PAPERLESS_PORT`: Paperless の Web UI を公開するホスト側のポート。compose の `ports` は既定で全インターフェースに公開する。LAN の中だけで使うなら `"<LAN 側の IP>:${PAPERLESS_PORT}:8000"` のように LAN 側のアドレスに限って公開し、インターネットへは直接出さない
 - `USERMAP_UID`、`USERMAP_GID`: `consume` の ACL で読み取りと削除を許可したユーザー
 
 `PAPERLESS_TOKEN` と `CLAUDE_CODE_OAUTH_TOKEN` は、手順 3 と 4 で発行してから入れる。`.env` は追跡しない。
@@ -78,8 +79,8 @@ docker compose -f compose.example.yaml run --rm ai-classifier --once
 ログに `周期完了: done=… review=… retried=… failed=… aborted=…` が出れば 1 周期が終わっている。
 
 - 終了コード 2: 環境変数の不備。ログに出るのは変数名だけ（値は出さない）。`PAPERLESS_URL`・`PAPERLESS_TOKEN`・`CLAUDE_CODE_OAUTH_TOKEN` を確かめる
-- 終了コード 1: 状態管理用のタグが足りない。ログに足りないタグ名が出る
-- `aborted=1` でその周期が打ち切られている: 利用枠の上限、認証エラー、ネットワーク障害のどれか。書類は `ai-todo` のまま残る。ログを見て、トークンと接続先を確かめる
+- 終了コード 1: 状態管理用のタグが足りない。ログに足りないタグ名が出る。`--once` では、周期の処理中に想定外の例外が出たときも 1 で終わる（ログに例外が出る）。常駐ループでは、タグ不足のときだけ 1 で止まり、想定外の例外はログに出して次の周期へ進む
+- `aborted=True` でその周期が打ち切られている: 利用枠の上限、認証エラー、ネットワーク障害のどれか。書類は `ai-todo` のまま残る。ログを見て、トークンと接続先を確かめる
 - 書類の `ai-todo` が `ai-done` か `ai-review` に変わり、タイトル・発行元・文書タイプ・書類日付が入っていることを Web UI で確かめる。ディスク上では `発行元/年/日付_タイトル.pdf` に移っている
 
 ## 5. 常駐させる
@@ -89,3 +90,5 @@ docker compose -f compose.example.yaml up -d
 ```
 
 既定では 5 分（`INTERVAL=300`）ごとに `ai-todo` の書類を処理する。週に 1 回程度、保存ビュー「確認待ち」（`ai-review`・`page-review`・`ai-failed` のいずれか）を見て直す（設計書 10 章）。
+
+AI が新しく作った発行元・文書タイプの名前が気に入らないときは、削除せずに Paperless の管理画面で名前を変えるか、既存のものに統合する。同じ名前を使う他の書類にもまとめて反映される（[D-006](decisions.md)）。削除すると、その名前を使っていた書類は発行元・文書タイプが空になり、ファイルが `未分類/` に移る。

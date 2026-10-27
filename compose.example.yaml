@@ -11,6 +11,8 @@ services:
       - db
       - broker
     ports:
+      # 既定では全インターフェースに公開する。LAN だけで使うなら
+      # "<LAN 側の IP>:${PAPERLESS_PORT}:8000" のように公開先のアドレスを限る。
       - "${PAPERLESS_PORT}:8000"
     volumes:
       - ${PAPERLESS_ROOT}/consume:/usr/src/paperless/consume
@@ -65,3 +67,5 @@ services:
       INTERVAL: ${INTERVAL:-300}
       CLAUDE_MODEL: ${CLAUDE_MODEL:-sonnet}
       CLAUDE_TIMEOUT: ${CLAUDE_TIMEOUT:-300}
+      # created の未来日判定に使う「今日」を Paperless と同じタイムゾーンにする。
+      TZ: ${TZ}

@@ -267,7 +267,7 @@ Paperless-ngx 一式と ai-classifier を、TrueNAS の 1 つのカスタムア�
 | `paperless` | `ghcr.io/paperless-ngx/paperless-ngx` | `PAPERLESS_OCR_LANGUAGE=jpn+eng`、`PAPERLESS_OCR_LANGUAGES=jpn`、`PAPERLESS_OCR_MODE=skip`、`PAPERLESS_TIME_ZONE`（利用者のタイムゾーン）、`PAPERLESS_FILENAME_FORMAT`（8 章）、`PAPERLESS_CONSUMER_RECURSIVE=true`（除外用サブフォルダのため）、`PAPERLESS_CONSUMER_POLLING=60`（SMB 経由の書き込みは inotify で拾えない場合があるため）、`USERMAP_UID`/`USERMAP_GID` |
 | `db` | `postgres` | Paperless 専用 |
 | `broker` | `redis` | Paperless のタスクキュー |
-| `ai-classifier` | このリポジトリ（Python ＋ Claude Code CLI） | `PAPERLESS_URL`、`PAPERLESS_TOKEN`（専用ユーザーの API トークン。`PAPERLESS_TOKEN_FILE` でファイルから読むこともできる）、`CLAUDE_CODE_OAUTH_TOKEN`、`INTERVAL=300`、`STATE_DIR=/state`、`CLAUDE_MODEL=sonnet`、`CLAUDE_TIMEOUT=300`（秒） |
+| `ai-classifier` | このリポジトリ（Python ＋ Claude Code CLI） | `PAPERLESS_URL`、`PAPERLESS_TOKEN`（専用ユーザーの API トークン。`PAPERLESS_TOKEN_FILE` でファイルから読むこともできる）、`CLAUDE_CODE_OAUTH_TOKEN`、`INTERVAL=300`、`STATE_DIR=/state`、`CLAUDE_MODEL=sonnet`、`CLAUDE_TIMEOUT=300`（秒）、`TZ`（Paperless と同じタイムゾーン。`created` の未来日判定の「今日」に使う） |
 
 - ai-classifier には Paperless 用の専用ユーザーを作る。権限は、書類とタグの閲覧・変更、発行元と文書タイプの閲覧・変更・追加（新規作成のため）だけにする
 - `bulk_edit` のページ操作（回転・ページ削除）は、書類の所有者であることを求められる場合がある。取り込み時のワークフローで所有者を ai-classifier のユーザーにするか、権限の要件を導入するバージョンで確認する
