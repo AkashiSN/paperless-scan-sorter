@@ -78,10 +78,12 @@ class ClaudeClient:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp).resolve() / "doc.pdf"
             path.write_bytes(pdf)
+            # 権限ルールの `/path` は設定ディレクトリからの相対になる。絶対パスは
+            # `//path` と書くので、絶対パスの前にもう 1 つ `/` を付ける。
             argv = [
                 self._executable, "-p", "--model", self._model,
                 "--max-turns", "3", "--output-format", "json",
-                "--allowedTools", f"Read({path})", prompt,
+                "--allowedTools", f"Read(/{path})", prompt,
             ]  # fmt: skip
             return self._run(argv, None, path.parent)
 

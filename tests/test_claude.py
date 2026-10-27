@@ -132,9 +132,12 @@ def test_PDFはそのファイルだけ読ませる() -> None:
     pdf = rec.cwd / "doc.pdf"
     assert rec.argv == [
         "claude", "-p", "--model", "sonnet", "--max-turns", "3",
-        "--output-format", "json", "--allowedTools", f"Read({pdf})", "p",
+        "--output-format", "json", "--allowedTools", f"Read(/{pdf})", "p",
     ]  # fmt: skip
-    assert rec.argv[rec.argv.index("--allowedTools") + 1] == f"Read({pdf})"
+    # 権限ルールの `/path` は設定ディレクトリからの相対で、絶対パスは `//path` と書く。
+    rule = rec.argv[rec.argv.index("--allowedTools") + 1]
+    assert rule == f"Read(/{pdf})"
+    assert rule.startswith("Read(//")
     assert rec.argv[rec.argv.index("--max-turns") + 1] == "3"
     assert rec.pdf_bytes == b"%PDF-1.7"
     assert rec.stdin is None
