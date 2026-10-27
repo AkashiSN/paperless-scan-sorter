@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[codz]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# 環境ごとの設定と秘密。トークンを含むので追跡しない
+.env
+.env.*
+!.env.example
+.envrc
+
+# 動かしたときの状態（失敗回数・ログ・退避した PDF）
+/state/
+
+# Editors / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# 変更ごとの worktree はリポジトリ内の .worktrees/ に置く。追跡すると
+# 別ブランチの作業一式がコミットに紛れるので外す（AGENTS.md）
+.worktrees/
+
+# Claude Code の作業場。環境ごとの設定（settings.local.json）と
+# リポジトリの中に置く worktree が入る
+.claude/
+
+# エージェントの環境ごとのフック・生成物
+.codex/
+.agents/
+.codegraph/
+.superpowers/
+graphify-out/

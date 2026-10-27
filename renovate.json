@@ -1,0 +1,25 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "packageRules": [
+    {
+      "description": "ワークフローのアクションはまとめる。確かめることは「CI が動くか」の 1 つで共通している。",
+      "groupName": "github actions",
+      "matchManagers": [
+        "github-actions"
+      ]
+    },
+    {
+      "description": "開発用の道具（pytest・ruff）はまとめる。どちらも同じ CI の lint とテストで確かめられる。",
+      "groupName": "dev tooling",
+      "matchManagers": [
+        "pep621"
+      ],
+      "matchDepTypes": [
+        "dependency-groups"
+      ]
+    }
+  ]
+}

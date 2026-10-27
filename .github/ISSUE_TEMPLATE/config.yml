@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 脆弱性の報告
+    url: https://github.com/AkashiSN/paperless-scan-sorter/security/advisories/new
+    about: 公開の Issue には書かず、非公開で報告してください。SECURITY.md を参照。
