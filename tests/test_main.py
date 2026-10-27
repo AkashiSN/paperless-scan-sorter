@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import date
 from pathlib import Path
 
@@ -103,3 +104,10 @@ def test_RuntimeErrorは必須タグ不足として扱わない(
     monkeypatch.setattr(app, "run_cycle", fake)
     assert app.main([]) == 0
     assert calls == 2
+
+
+def test_httpxのリクエストログを出さない(monkeypatch: pytest.MonkeyPatch, env: None) -> None:
+    monkeypatch.setattr(app, "run_cycle", lambda *a, **k: CycleResult())
+    logging.getLogger("httpx").setLevel(logging.NOTSET)
+    assert app.main(["--once"]) == 0
+    assert logging.getLogger("httpx").level == logging.WARNING

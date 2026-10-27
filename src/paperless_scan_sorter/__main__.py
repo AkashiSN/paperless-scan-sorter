@@ -48,6 +48,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    # httpx は INFO で要求ごとの URL を出し、周期ごとにログが埋まるので警告以上に絞る。
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
     try:
         settings = load_settings(os.environ)

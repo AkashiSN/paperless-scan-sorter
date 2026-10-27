@@ -3,11 +3,12 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterable
 
 from paperless_scan_sorter.tags import STATE_TAGS
 
-# `{…}` の 3 か所だけを str.replace で埋める。JSON の `{}` を含むので str.format は使わない。
+# `{…}` の 3 か所だけを 1 回の置換で埋める。JSON の `{}` を含むので str.format は使わない。
 _TEMPLATE = """\
 あなたはスキャンした書類を整理する分類器です。標準入力（または指定した PDF）が書類の本文です。
 
@@ -39,6 +40,8 @@ _TEMPLATE = """\
 {tags}
 """
 
+_PLACEHOLDER = re.compile(r"\{(correspondents|document_types|tags)\}")
+
 
 def _format_names(names: Iterable[str]) -> str:
     """名前を重複なしで名前順に並べ、1 行 1 つの箇条書きにする。"""
@@ -55,9 +58,10 @@ def build_prompt(
     tags: Iterable[str],
 ) -> str:
     """候補一覧を埋めたプロンプトを返す。状態管理用のタグは候補から除く。"""
-    selectable_tags = (t for t in tags if t not in STATE_TAGS)
-    return (
-        _TEMPLATE.replace("{correspondents}", _format_names(correspondents))
-        .replace("{document_types}", _format_names(document_types))
-        .replace("{tags}", _format_names(selectable_tags))
-    )
+    values = {
+        "correspondents": _format_names(correspondents),
+        "document_types": _format_names(document_types),
+        "tags": _format_names(t for t in tags if t not in STATE_TAGS),
+    }
+    # 1 回の走査で埋めるので、名前に `{tags}` などが含まれていても再び置き換わらない。
+    return _PLACEHOLDER.sub(lambda m: values[m.group(1)], _TEMPLATE)

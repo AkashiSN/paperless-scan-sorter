@@ -39,3 +39,12 @@ def test_JSON_の波括弧が残る() -> None:
     assert "{correspondents}" not in p
     assert "{document_types}" not in p
     assert "{tags}" not in p
+
+
+def test_候補の名前に含まれる差し込み記号は埋めない() -> None:
+    p = build_prompt(
+        correspondents=["{tags}", "{document_types}"], document_types=[], tags=["銀行"]
+    )
+    assert "発行元の候補:\n- {document_types}\n- {tags}\n" in p
+    assert p.count("\n- 銀行\n") == 1
+    assert "文書の種類の候補:\n（なし）" in p

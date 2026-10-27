@@ -151,3 +151,13 @@ def test_入れ子が深すぎるJSONは書類起因の失敗() -> None:
     text = '{"a": ' + "[" * 100000
     with pytest.raises(DocumentFailure):
         parse_classification(text, known_tags=KNOWN, today=TODAY)
+
+
+@pytest.mark.parametrize("ch", ["​", "‮", " ", " ", "﻿", "\x7f"])
+def test_書式文字と行区切りも除く(ch: str) -> None:
+    assert sanitize_component(f"a{ch}b", 60) == "ab"
+    c = parse_classification(
+        _j(correspondent=f"{ch}Foo{ch}", document_type=f"請{ch}求書"), known_tags=KNOWN, today=TODAY
+    )
+    assert c.correspondent == "Foo"
+    assert c.document_type == "請求書"

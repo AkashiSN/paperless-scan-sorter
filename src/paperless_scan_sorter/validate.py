@@ -20,6 +20,9 @@ CORRESPONDENT_MAX = 30
 TAGS_MAX = 3
 # created として採用する範囲。これ以前（同日を含む）は捨てる。
 _CREATED_YEARS_BACK = 30
+# 名前から除く Unicode の一般カテゴリ。制御文字（Cc）、ゼロ幅文字や双方向制御などの
+# 書式文字（Cf）、行区切り（Zl）、段落区切り（Zp）は見た目に出ず、名前を偽装できる。
+_REMOVED_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
 
 
 @dataclass(frozen=True)
@@ -53,7 +56,7 @@ def _strip_edges(value: str) -> str:
 
 
 def _remove_controls(value: str) -> str:
-    return "".join(ch for ch in value if unicodedata.category(ch) != "Cc")
+    return "".join(ch for ch in value if unicodedata.category(ch) not in _REMOVED_CATEGORIES)
 
 
 def _clean_name(value: str) -> str | None:
@@ -64,11 +67,11 @@ def _clean_name(value: str) -> str | None:
 def sanitize_component(value: str, max_len: int) -> str | None:
     """パスの一部になる値から危険な文字を除き、長さを制限する。
 
-    スラッシュ・バックスラッシュ・制御文字を除き、前後の空白とピリオドを削って
+    スラッシュ・バックスラッシュ・制御文字・書式文字・行と段落の区切りを除き、前後の空白とピリオドを削って
     max_len 文字に切り詰める。切り詰めで新しく末尾に出た空白やピリオドも削る。
     空、または ".." だけになるときは None を返す。
     """
-    cleaned = "".join(ch for ch in value if ch not in "/\\" and unicodedata.category(ch) != "Cc")
+    cleaned = "".join(ch for ch in _remove_controls(value) if ch not in "/\\")
     result = _strip_edges(_strip_edges(cleaned)[:max_len])
     if not result or set(result) == {"."}:
         return None

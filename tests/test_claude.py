@@ -224,3 +224,20 @@ def test_エラーのresultは先頭200文字だけログに出す(caplog: pytes
 def test_エラーのresultが文字列でなくても周期を止める() -> None:
     with pytest.raises(ServiceUnavailable):
         make(Recorder(stdout=_error(None))).classify_text("p", "c")
+
+
+def test_Paperlessのトークンを渡さない() -> None:
+    rec = Recorder()
+    ClaudeClient(
+        model="sonnet",
+        runner=rec,
+        env={
+            "PAPERLESS_TOKEN": "p",
+            "PAPERLESS_TOKEN_FILE": "/run/secrets/x",
+            "CLAUDE_CODE_OAUTH_TOKEN": "t",
+            "PATH": "/bin",
+        },
+    ).classify_text("p", "c")
+    assert "PAPERLESS_TOKEN" not in rec.env
+    assert "PAPERLESS_TOKEN_FILE" not in rec.env
+    assert rec.env["CLAUDE_CODE_OAUTH_TOKEN"] == "t"

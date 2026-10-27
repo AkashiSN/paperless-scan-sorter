@@ -14,6 +14,10 @@ from paperless_scan_sorter.errors import DocumentFailure, ServiceUnavailable
 
 logger = logging.getLogger(__name__)
 
+# 子プロセスに渡さない環境変数。API キーが残ると従量課金になり、Paperless のトークンは
+# claude が使わないうえ、書類の本文に誘導されて漏れる経路を残さないため。
+_DROPPED_ENV = frozenset({"ANTHROPIC_API_KEY", "PAPERLESS_TOKEN", "PAPERLESS_TOKEN_FILE"})
+
 # (argv, stdin_text, cwd, env, timeout)
 type Runner = Callable[
     [Sequence[str], str | None, Path, Mapping[str, str], float],
@@ -58,8 +62,7 @@ class ClaudeClient:
         self._executable = executable
         self._runner = runner
         source = os.environ if env is None else env
-        # API キーが残ると従量課金になるため、サブスクリプション認証だけに限る。
-        self._env = {k: v for k, v in source.items() if k != "ANTHROPIC_API_KEY"}
+        self._env = {k: v for k, v in source.items() if k not in _DROPPED_ENV}
 
     def classify_text(self, prompt: str, content: str) -> str:
         """本文を stdin で渡す。ツールは許可しない。"""
