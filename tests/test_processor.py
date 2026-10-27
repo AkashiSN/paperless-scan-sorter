@@ -462,3 +462,16 @@ def test_ai_failedに送ったら新規作成の記録を消す(
     r = run_cycle(server.client(), FakeClaude(ok("壊れ")).client(), store, created, today=TODAY)
     assert r == CycleResult(failed=1)
     assert not created.contains(DOC_ID)
+
+
+def test_既存の発行元はそのまま照合し新しい名前は無害化して作る(
+    store: FailureStore, created: CreatedStore
+) -> None:
+    server = FakePaperless([_doc(100), _doc(101)])
+    server.correspondent_rows.append({"id": 11, "name": "Foo Inc."})
+    claude = FakeClaude(ok(_answer(correspondent="Foo Inc.")), ok(_answer(correspondent="a/b")))
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
+    assert r == CycleResult(done=1, review=1)
+    assert server.patches[100]["correspondent"] == 11
+    assert server.posts_to("/api/correspondents/") == [{"name": "ab"}]
+    assert server.patches[101]["correspondent"] == 501

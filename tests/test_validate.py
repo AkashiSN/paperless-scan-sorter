@@ -85,17 +85,25 @@ def test_切り詰めた末尾のピリオドも削る() -> None:
     assert sanitize_component("あ" * 29 + ".い", 30) == "あ" * 29
 
 
-def test_titleは60文字correspondentは30文字で切る() -> None:
+def test_titleは60文字で切りcorrespondentは切らない() -> None:
     c = parse_classification(
         _j(title="あ" * 61, correspondent="い" * 31), known_tags=KNOWN, today=TODAY
     )
     assert c.title == "あ" * 60
-    assert c.correspondent == "い" * 30
+    # correspondent は既存の名前と照合するため、ここでは切り詰めない（新規作成時に無害化する）。
+    assert c.correspondent == "い" * 31
 
 
-def test_無害化で空になるtitleとcorrespondentはNone() -> None:
+def test_無害化で空になるtitleはNone() -> None:
     c = parse_classification(_j(title="..", correspondent="/"), known_tags=KNOWN, today=TODAY)
     assert c.title is None
+    assert c.correspondent == "/"
+
+
+def test_correspondentは制御文字と前後の空白だけ除く() -> None:
+    c = parse_classification(_j(correspondent="  Foo\n Inc. "), known_tags=KNOWN, today=TODAY)
+    assert c.correspondent == "Foo Inc."
+    c = parse_classification(_j(correspondent=" \x00 "), known_tags=KNOWN, today=TODAY)
     assert c.correspondent is None
 
 

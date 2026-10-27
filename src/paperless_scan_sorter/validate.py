@@ -28,6 +28,10 @@ class Classification:
 
     title・correspondent・document_type が None のときは「不採用」を表し、
     呼び出し側は確認待ちに回す。
+
+    title はパス用に無害化済み。correspondent と document_type は既存の名前と
+    そのまま照合できるよう制御文字と前後の空白だけを除いてある。correspondent を
+    新しく作るときは、呼び出し側が sanitize_component で無害化する。
     """
 
     title: str | None
@@ -50,6 +54,11 @@ def _strip_edges(value: str) -> str:
 
 def _remove_controls(value: str) -> str:
     return "".join(ch for ch in value if unicodedata.category(ch) != "Cc")
+
+
+def _clean_name(value: str) -> str | None:
+    """制御文字と前後の空白を除く。空になれば None。"""
+    return _remove_controls(value).strip() or None
 
 
 def sanitize_component(value: str, max_len: int) -> str | None:
@@ -132,7 +141,6 @@ def parse_classification(
     ):
         raise DocumentFailure("出力の型が仕様と違う")
 
-    doc_type = _remove_controls(document_type).strip()
     picked: list[str] = []
     for tag in raw_tags:
         if tag in known_tags and tag not in STATE_TAGS and tag not in picked:
@@ -140,8 +148,8 @@ def parse_classification(
 
     return Classification(
         title=sanitize_component(title, TITLE_MAX),
-        correspondent=sanitize_component(correspondent, CORRESPONDENT_MAX),
-        document_type=doc_type or None,
+        correspondent=_clean_name(correspondent),
+        document_type=_clean_name(document_type),
         tags=tuple(picked[:TAGS_MAX]),
         created=_parse_created(created, today),
         confident=confident,

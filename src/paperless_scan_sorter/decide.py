@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 
 from paperless_scan_sorter.paperless import Document, Named
-from paperless_scan_sorter.validate import Classification
+from paperless_scan_sorter.validate import CORRESPONDENT_MAX, Classification, sanitize_component
 
 
 @dataclass(frozen=True)
@@ -39,8 +39,13 @@ def _choose(
     proposed: str | None,
     named: Sequence[Named],
     label: str,
+    new_name: Callable[[str], str | None],
 ) -> tuple[int | str | None, str | None]:
-    """発行元・文書タイプ 1 項目の書き戻し値と、review にする理由（無ければ None）を返す。"""
+    """発行元・文書タイプ 1 項目の書き戻し値と、review にする理由（無ければ None）を返す。
+
+    既存の名前とは判定結果をそのまま照合する。一致が無く新しく作るときだけ
+    new_name で作る名前に直し、None になれば作らずに採用できない扱いにする。
+    """
     if current is not None:
         # 既に設定された値は上書きしない。判定が食い違うときだけ人に見てもらう。
         if proposed is None:
@@ -54,7 +59,20 @@ def _choose(
     for n in named:
         if n.name == proposed:
             return n.id, None
-    return proposed, f"{label}を新規作成"
+    name = new_name(proposed)
+    if name is None:
+        return None, f"{label}を採用できない"
+    return name, f"{label}を新規作成"
+
+
+def _correspondent_name(name: str) -> str | None:
+    """発行元はパスに入るので、作る前に無害化と長さ制限を通す。"""
+    return sanitize_component(name, CORRESPONDENT_MAX)
+
+
+def _document_type_name(name: str) -> str | None:
+    """文書タイプはパスに入らないので、検証済みの値をそのまま使う。"""
+    return name
 
 
 def decide(
@@ -74,11 +92,13 @@ def decide(
     """
     reasons: list[str] = []
 
-    correspondent, reason = _choose(doc.correspondent, c.correspondent, correspondents, "発行元")
+    correspondent, reason = _choose(
+        doc.correspondent, c.correspondent, correspondents, "発行元", _correspondent_name
+    )
     if reason:
         reasons.append(reason)
     document_type, reason = _choose(
-        doc.document_type, c.document_type, document_types, "文書タイプ"
+        doc.document_type, c.document_type, document_types, "文書タイプ", _document_type_name
     )
     if reason:
         reasons.append(reason)

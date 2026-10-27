@@ -152,3 +152,44 @@ def test_追加の理由だけでもai_reviewにする() -> None:
     )
     assert d.review and d.reasons == ("理由",)
     assert d.correspondent == 10
+
+
+def test_ピリオドで終わる既存の発行元にそのまま一致する() -> None:
+    corr = [*CORR, Named(11, "Foo Inc.")]
+    d = decide(
+        DOC,
+        cls(correspondent="Foo Inc."),
+        correspondents=corr,
+        document_types=TYPES,
+        tag_names=TAGN,
+        ids=IDS,
+    )
+    assert d.correspondent == 11 and not d.review
+
+
+def test_長い既存の発行元にもそのまま一致する() -> None:
+    corr = [Named(12, "い" * 31)]
+    d = decide(
+        DOC, cls(correspondent="い" * 31), correspondents=corr,
+        document_types=TYPES, tag_names=TAGN, ids=IDS,
+    )  # fmt: skip
+    assert d.correspondent == 12 and not d.review
+
+
+def test_新しい発行元は無害化してから作る() -> None:
+    d = run(DOC, cls(correspondent="a/b"))
+    assert d.correspondent == "ab" and d.review
+    assert d.reasons == ("発行元を新規作成",)
+    d = run(DOC, cls(correspondent="い" * 31))
+    assert d.correspondent == "い" * 30
+
+
+def test_無害化で空になる新しい発行元は作らずai_review() -> None:
+    d = run(DOC, cls(correspondent="/.."))
+    assert d.correspondent is None and d.review
+    assert d.reasons == ("発行元を採用できない",)
+
+
+def test_文書タイプは新規作成でも無害化しない() -> None:
+    d = run(DOC, cls(document_type="A/B."))
+    assert d.document_type == "A/B."
