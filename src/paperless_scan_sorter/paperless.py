@@ -101,7 +101,7 @@ class PaperlessClient:
         return [Named(r["id"], r["name"]) for r in rows]
 
     def _create(self, path: str, name: str) -> Named:
-        body = self._request("POST", path, json={"name": name}).json()
+        body = self._request("POST", path, document_scoped=True, json={"name": name}).json()
         return Named(body["id"], body["name"])
 
     def _list_all(self, path: str, params: dict[str, object]) -> list[dict]:

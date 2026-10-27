@@ -162,10 +162,24 @@ def test_書類単位の400と404は書類起因の失敗(status: int) -> None:
 
 
 @pytest.mark.parametrize("status", [400, 404])
-def test_一覧と作成の400と404は周期を止める(status: int) -> None:
+def test_一覧の400と404は周期を止める(status: int) -> None:
     client = make_client(lambda r: httpx.Response(status))
     with pytest.raises(ServiceUnavailable):
         client.tags()
+
+
+@pytest.mark.parametrize("status", [400, 404])
+def test_作成の400と404は書類起因の失敗(status: int) -> None:
+    client = make_client(lambda r: httpx.Response(status))
+    with pytest.raises(DocumentFailure):
+        client.create_correspondent("x")
+    with pytest.raises(DocumentFailure):
+        client.create_document_type("x")
+
+
+@pytest.mark.parametrize("status", [401, 403, 500])
+def test_作成の認証とサーバーの失敗は周期を止める(status: int) -> None:
+    client = make_client(lambda r: httpx.Response(status))
     with pytest.raises(ServiceUnavailable):
         client.create_correspondent("x")
 

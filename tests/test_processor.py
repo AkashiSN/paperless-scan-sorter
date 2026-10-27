@@ -51,6 +51,7 @@ class FakePaperless:
         self.posts: list[tuple[str, dict]] = []
         self.downloads: list[int] = []
         self.patch_status: dict[int, int] = {}
+        self.post_status: dict[str, int] = {}
         self.list_status: int | None = None
         self._next_id = 500
         self.tag_rows = [
@@ -94,6 +95,8 @@ class FakePaperless:
             return httpx.Response(200, json={})
         if method == "POST":
             body = json.loads(request.content)
+            if path in self.post_status:
+                return httpx.Response(self.post_status[path])
             self.posts.append((path, body))
             self._next_id += 1
             return httpx.Response(201, json={"id": self._next_id, "name": body["name"]})
@@ -255,6 +258,7 @@ def test_ai_failedへのPATCHが失敗しても次の書類へ進む(
         r = run_cycle(server.client(), claude.client(), store, today=TODAY)
     assert r.done == 1
     assert 101 in server.patches
+    assert store.count(100) == 3
     assert any(rec.levelno == logging.WARNING for rec in caplog.records)
 
 
@@ -333,3 +337,15 @@ def test_ai_failedへのPATCHで利用不可なら周期を打ち切る(store: F
     r = run_cycle(server.client(), claude.client(), store, today=TODAY)
     assert r.aborted
     assert len(claude.calls) == 1
+
+
+def test_発行元の作成が400でも次の書類を処理する(store: FailureStore) -> None:
+    server = FakePaperless([_doc(100), _doc(101)])
+    server.post_status["/api/correspondents/"] = 400
+    claude = FakeClaude(ok(_answer(correspondent="△△商事")), ok(_answer()))
+    r = run_cycle(server.client(), claude.client(), store, today=TODAY)
+    assert r == CycleResult(done=1, retried=1)
+    assert not r.aborted
+    assert store.count(100) == 1
+    assert 100 not in server.patches
+    assert 101 in server.patches
