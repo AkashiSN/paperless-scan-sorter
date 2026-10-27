@@ -5,7 +5,9 @@ description = "Paperless-ngx に取り込んだスキャン書類を Claude Code
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.14"
-dependencies = []
+dependencies = [
+    "httpx>=0.28,<1",
+]
 
 [build-system]
 requires = ["uv_build>=0.13,<0.14"]
