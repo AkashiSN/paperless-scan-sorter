@@ -184,6 +184,25 @@ def test_新しい発行元は無害化してから作る() -> None:
     assert d.correspondent == "い" * 30
 
 
+def test_無害化した名前が既存にあれば作らずにその発行元を使う() -> None:
+    corr = [Named(10, "○○銀行"), Named(11, "い" * 30)]
+    for proposed, expected in [("○○銀行.", 10), ("い" * 31, 11)]:
+        d = decide(
+            DOC,
+            cls(correspondent=proposed),
+            correspondents=corr,
+            document_types=TYPES,
+            tag_names=TAGN,
+            ids=IDS,
+        )
+        assert d.correspondent == expected and not d.review
+
+
+def test_自動マッチの発行元と無害化した名前が一致すれば食い違いにしない() -> None:
+    d = run(replace(DOC, correspondent=10), cls(correspondent="○○銀行."))
+    assert d.correspondent is None and not d.review
+
+
 def test_無害化で空になる新しい発行元は作らずai_review() -> None:
     d = run(DOC, cls(correspondent="/.."))
     assert d.correspondent is None and d.review

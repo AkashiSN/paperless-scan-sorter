@@ -43,23 +43,25 @@ def _choose(
 ) -> tuple[int | str | None, str | None]:
     """発行元・文書タイプ 1 項目の書き戻し値と、review にする理由（無ければ None）を返す。
 
-    既存の名前とは判定結果をそのまま照合する。一致が無く新しく作るときだけ
-    new_name で作る名前に直し、None になれば作らずに採用できない扱いにする。
+    既存の名前とは、判定結果そのものと、new_name で作る名前に直したものの両方で
+    照合する。前の書類で直した名前を作ってあれば、同じ判定はそれに一致する。
+    どちらにも一致せず、直した名前が None になれば作らずに採用できない扱いにする。
     """
     if current is not None:
         # 既に設定された値は上書きしない。判定が食い違うときだけ人に見てもらう。
         if proposed is None:
             return None, None
         existing = next((n.name for n in named if n.id == current), None)
-        if existing != proposed:
+        if existing is None or existing not in (proposed, new_name(proposed)):
             return None, f"{label}が自動マッチと食い違う"
         return None, None
     if proposed is None:
         return None, f"{label}を採用できない"
-    for n in named:
-        if n.name == proposed:
-            return n.id, None
     name = new_name(proposed)
+    for candidate in (proposed, name):
+        for n in named:
+            if n.name == candidate:
+                return n.id, None
     if name is None:
         return None, f"{label}を採用できない"
     return name, f"{label}を新規作成"
