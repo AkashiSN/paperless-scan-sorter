@@ -475,3 +475,35 @@ def test_既存の発行元はそのまま照合し新しい名前は無害化�
     assert server.patches[100]["correspondent"] == 11
     assert server.posts_to("/api/correspondents/") == [{"name": "ab"}]
     assert server.patches[101]["correspondent"] == 501
+
+
+def test_失敗が上限に達した書類は判定せずにai_failedへ送る(
+    store: FailureStore, created: CreatedStore
+) -> None:
+    for _ in range(3):
+        store.increment(DOC_ID)
+    created.mark(DOC_ID)
+    server = FakePaperless([_doc()])
+    claude = FakeClaude(ok(_answer()))
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
+    assert r == CycleResult(failed=1)
+    assert claude.calls == []
+    assert server.downloads == []
+    assert server.patches[DOC_ID] == {"tags": sorted([INBOX, EXISTING_TAG, AI_FAILED])}
+    assert store.count(DOC_ID) == 0
+    assert not created.contains(DOC_ID)
+
+
+def test_上限に達した書類のai_failedへのPATCHが400なら回数を残し次へ進む(
+    store: FailureStore, created: CreatedStore
+) -> None:
+    for _ in range(3):
+        store.increment(100)
+    server = FakePaperless([_doc(100), _doc(101)])
+    server.patch_status[100] = 400
+    claude = FakeClaude(ok(_answer()))
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
+    assert r == CycleResult(done=1, failed=1)
+    assert len(claude.calls) == 1
+    assert store.count(100) == 3
+    assert 101 in server.patches

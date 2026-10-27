@@ -82,6 +82,16 @@ def run_cycle(
     )
 
     for doc in docs:
+        if store.count(doc.id) >= MAX_FAILURES:
+            # 前の周期で ai-failed への付け替えだけが失敗した書類。判定し直さず
+            # 付け替えだけをやり直す（D-007）。
+            try:
+                _mark_failed(doc, paperless, store, created, ids, result)
+            except ServiceUnavailable as e:
+                logger.error("書類 %d の失敗処理中に利用不可となり周期を打ち切る: %s", doc.id, e)
+                result.aborted = True
+                return result
+            continue
         try:
             decision = _classify(
                 doc,
@@ -215,6 +225,19 @@ def _on_failure(
         result.retried += 1
         logger.info("書類 %d: retry (%d/%d) %s", doc.id, count, MAX_FAILURES, error)
         return
+    logger.info("書類 %d: 失敗が上限に達した %s", doc.id, error)
+    _mark_failed(doc, paperless, store, created, ids, result)
+
+
+def _mark_failed(
+    doc: Document,
+    paperless: PaperlessClient,
+    store: FailureStore,
+    created: CreatedStore,
+    ids: TagIds,
+    result: CycleResult,
+) -> None:
+    """ai-failed に付け替える。付け替えが 400/404 なら回数を残して次の周期に任せる。"""
     try:
         paperless.patch_document(doc.id, {"tags": sorted(failed_tags(doc, ids))})
     except DocumentFailure as e:
