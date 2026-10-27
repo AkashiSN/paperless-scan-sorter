@@ -10,6 +10,15 @@ services:
     depends_on:
       - db
       - broker
+    # Web が応答するまで（初回はマイグレーションが終わるまで）healthy にしない。イメージにも
+    # 同じ HEALTHCHECK があるが、ai-classifier が待つ条件なのでここに明記する。start_period の
+    # 間の失敗は数えないので、初回のマイグレーションが長くても unhealthy にならない。
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "-S", "-L", "--max-time", "2", "http://localhost:8000"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 5m
     ports:
       # 既定では全インターフェースに公開する。LAN だけで使うなら
       # "<LAN 側の IP>:${PAPERLESS_PORT}:8000" のように公開先のアドレスを限る。
@@ -55,8 +64,11 @@ services:
     # イメージの公開はまだ整えていないので、このリポジトリからビルドする。
     build: .
     restart: unless-stopped
+    # Paperless の API が応答してから起動する。起動直後の周期が打ち切られて INTERVAL 分
+    # 待たされるのを避けるため。
     depends_on:
-      - paperless
+      paperless:
+        condition: service_healthy
     volumes:
       # コンテナ内のユーザーは UID/GID 1000。ホスト側のディレクトリを書き込めるようにしておく。
       - ${PAPERLESS_ROOT}/classifier:/state
