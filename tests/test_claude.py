@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
@@ -11,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from paperless_scan_sorter.claude import ClaudeClient
-from paperless_scan_sorter.errors import DocumentFailure, ServiceUnavailable
+from paperless_scan_sorter.errors import CliFailure, DocumentFailure, ServiceUnavailable
 
 
 def _ok(result: str = "{}") -> str:
@@ -185,14 +186,50 @@ def test_利用枠や認証のエラーは周期を止める() -> None:
         make(Recorder(stdout=out)).classify_text("p", "c")
 
 
-def test_JSONでない出力は周期を止める() -> None:
+@pytest.mark.parametrize(
+    "stderr",
+    [
+        "Authentication failed",
+        "Please run /login",
+        "invalid token",
+        "API Error: 401",
+        "HTTP 403 Forbidden",
+        "Rate limit exceeded",
+        "Claude usage limit reached",
+        "Quota exceeded",
+        "Network error",
+        "connect ECONNREFUSED 127.0.0.1:443",
+        "read ECONNRESET",
+        "getaddrinfo ENOTFOUND api.example.com",
+        "connect ETIMEDOUT",
+        "Socket hang up",
+    ],
+)
+def test_JSONでない出力でも障害を示すstderrなら周期を止める(stderr: str) -> None:
     with pytest.raises(ServiceUnavailable):
-        make(Recorder(stdout="", returncode=1, stderr="boom")).classify_text("p", "c")
+        make(Recorder(stdout="", returncode=1, stderr=stderr)).classify_text("p", "c")
 
 
-def test_オブジェクトでないJSONは周期を止める() -> None:
-    with pytest.raises(ServiceUnavailable):
-        make(Recorder(stdout="[1, 2]")).classify_text("p", "c")
+@pytest.mark.parametrize(
+    ("stdout", "stderr"),
+    [("", "boom"), ("", ""), ("not json", "Segmentation fault"), ("[1, 2]", ""), ('"x"', "")],
+)
+def test_障害を示さないJSONでない出力はCLIの失敗として数える(stdout: str, stderr: str) -> None:
+    with pytest.raises(CliFailure) as e:
+        make(Recorder(stdout=stdout, returncode=1, stderr=stderr)).classify_text("p", "c")
+    assert isinstance(e.value, DocumentFailure)
+
+
+def test_JSONでない出力はreturncodeとstderrの先頭だけをログに出す(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    rec = Recorder(stdout="本文の断片", returncode=139, stderr="x" * 300)
+    with caplog.at_level(logging.ERROR), pytest.raises(CliFailure):
+        make(rec).classify_text("p", "c")
+    text = caplog.text
+    assert "returncode=139" in text
+    assert "x" * 200 in text and "x" * 201 not in text
+    assert "本文の断片" not in text
 
 
 def test_CLIが無ければ周期を止める() -> None:

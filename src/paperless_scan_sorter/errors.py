@@ -7,6 +7,13 @@ class DocumentFailure(Exception):
     """書類に起因する失敗。書類ごとの失敗回数に数える。"""
 
 
+class CliFailure(DocumentFailure):
+    """claude CLI が応答の JSON を返さずに終わった失敗のうち、障害を示す語を含まないもの。
+
+    書類起因として数えるが、同じ周期で連続する書類に続けて起きたら周期を打ち切る（D-010）。
+    """
+
+
 class ServiceUnavailable(Exception):
     """書類に起因しない失敗（利用枠・認証・ネットワーク・Paperless の 401/403/5xx）。
 

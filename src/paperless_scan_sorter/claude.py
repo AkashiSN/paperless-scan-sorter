@@ -10,7 +10,7 @@ import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
-from paperless_scan_sorter.errors import DocumentFailure, ServiceUnavailable
+from paperless_scan_sorter.errors import CliFailure, DocumentFailure, ServiceUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +30,14 @@ _DROPPED_ENV = frozenset({"ANTHROPIC_API_KEY", "PAPERLESS_TOKEN", "PAPERLESS_TOK
 _LOCKDOWN_ARGS = (
     "--no-session-persistence", "--permission-mode", "dontAsk",
     "--setting-sources", "", "--strict-mcp-config", "--restricted",
+)  # fmt: skip
+
+# 応答の JSON が無いとき、stderr（小文字にしたもの）にこれらを含めば、認証・利用枠・
+# ネットワークの障害とみなして周期を打ち切る。含まなければ書類起因の CLI の失敗とする（D-010）。
+_OUTAGE_MARKERS = (
+    "auth", "login", "token", "401", "403", "rate limit", "usage limit", "quota",
+    "network", "econnrefused", "econnreset", "enotfound", "etimedout", "getaddrinfo",
+    "socket",
 )  # fmt: skip
 
 # (argv, stdin_text, cwd, env, timeout)
@@ -117,12 +125,16 @@ class ClaudeClient:
         except ValueError:
             data = None
         if not isinstance(data, dict):
+            stderr = proc.stderr or ""
             logger.error(
                 "claude の出力を JSON として読めない: returncode=%s stderr=%s",
                 proc.returncode,
-                (proc.stderr or "")[:200],
+                stderr[:200],
             )
-            raise ServiceUnavailable("claude の出力を JSON として読めない")
+            lowered = stderr.lower()
+            if any(marker in lowered for marker in _OUTAGE_MARKERS):
+                raise ServiceUnavailable("claude が認証・利用枠・ネットワークの障害で終わった")
+            raise CliFailure("claude の出力を JSON として読めない")
 
         if data.get("is_error"):
             if data.get("subtype") == "error_max_turns":

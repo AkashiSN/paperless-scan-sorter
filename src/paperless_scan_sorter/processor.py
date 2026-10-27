@@ -9,7 +9,12 @@ from datetime import date
 
 from paperless_scan_sorter.claude import ClaudeClient
 from paperless_scan_sorter.decide import Decision, TagIds, decide, failed_tags
-from paperless_scan_sorter.errors import DocumentFailure, MissingTagsError, ServiceUnavailable
+from paperless_scan_sorter.errors import (
+    CliFailure,
+    DocumentFailure,
+    MissingTagsError,
+    ServiceUnavailable,
+)
 from paperless_scan_sorter.failures import CreatedStore, FailureStore
 from paperless_scan_sorter.paperless import Document, Named, PaperlessClient
 from paperless_scan_sorter.prompt import build_prompt
@@ -83,6 +88,9 @@ def run_cycle(
         tags=tag_names,
     )
 
+    # 直前に処理した書類が CLI の失敗で終わったか。障害を示す語を含まない障害でも、
+    # 1 周期で数えるのを 1 件までにする（D-010）。
+    previous_cli_failure = False
     for doc in docs:
         if store.count(doc.id) >= MAX_FAILURES:
             # 前の周期で ai-failed への付け替えだけが失敗した書類。判定し直さず
@@ -114,6 +122,15 @@ def run_cycle(
             result.aborted = True
             return result
         except Exception as e:
+            if isinstance(e, CliFailure) and previous_cli_failure:
+                logger.error(
+                    "書類 %d でも claude が応答を返さず、連続したため数えずに周期を打ち切る: %s",
+                    doc.id,
+                    e,
+                )
+                result.aborted = True
+                return result
+            previous_cli_failure = isinstance(e, CliFailure)
             if isinstance(e, DocumentFailure):
                 failure = e
             else:
@@ -130,6 +147,7 @@ def run_cycle(
                 result.aborted = True
                 return result
             continue
+        previous_cli_failure = False
         store.clear(doc.id)
         if decision.review:
             result.review += 1

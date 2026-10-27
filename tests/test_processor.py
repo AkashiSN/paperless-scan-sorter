@@ -600,3 +600,76 @@ def test_書き戻し後の記録の消去で利用不可なら集計してか�
     r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
     assert r == CycleResult(done=1, aborted=True)
     assert list(server.patches) == [100]
+
+
+class CrashingClaude(FakeClaude):
+    """指定した回の呼び出しだけ、応答の JSON を返さずに終わる偽の claude。"""
+
+    def __init__(self, crash_on: set[int], *outputs: str) -> None:
+        super().__init__(*outputs)
+        self.crash_on = crash_on
+
+    def __call__(
+        self,
+        argv: Sequence[str],
+        stdin: str | None,
+        cwd: Path,
+        env: Mapping[str, str],
+        timeout: float,
+    ) -> subprocess.CompletedProcess[str]:
+        n = len(self.calls)
+        proc = super().__call__(argv, stdin, cwd, env, timeout)
+        if n in self.crash_on:
+            return subprocess.CompletedProcess(list(argv), 139, "", "Segmentation fault")
+        return proc
+
+
+def test_CLIの失敗が1件なら数えて次の書類へ進む(store: FailureStore, created: CreatedStore) -> None:
+    server = FakePaperless([_doc(100), _doc(101)])
+    claude = CrashingClaude({0}, ok(_answer()))
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
+    assert r == CycleResult(done=1, retried=1)
+    assert store.count(100) == 1
+    assert 101 in server.patches
+
+
+def test_連続する書類でCLIの失敗が続いたら2件目は数えずに打ち切る(
+    store: FailureStore, created: CreatedStore
+) -> None:
+    server = FakePaperless([_doc(100), _doc(101), _doc(102)])
+    claude = CrashingClaude({0, 1}, ok(_answer()))
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
+    assert r == CycleResult(retried=1, aborted=True)
+    assert store.count(100) == 1
+    assert store.count(101) == 0
+    assert len(claude.calls) == 2
+    assert server.patches == {}
+
+
+def test_間に成功を挟んだCLIの失敗はそれぞれ数える(
+    store: FailureStore, created: CreatedStore
+) -> None:
+    server = FakePaperless([_doc(100), _doc(101), _doc(102)])
+    claude = CrashingClaude({0, 2}, ok(_answer()))
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
+    assert r == CycleResult(done=1, retried=2)
+    assert store.count(100) == 1
+    assert store.count(102) == 1
+
+
+def test_間に別の書類の失敗を挟んだCLIの失敗はそれぞれ数える(
+    store: FailureStore, created: CreatedStore
+) -> None:
+    server = FakePaperless([_doc(100), _doc(101), _doc(102)])
+    claude = CrashingClaude({0, 2}, ok("壊れ"))
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
+    assert r == CycleResult(retried=3)
+
+
+def test_前の周期のCLIの失敗は持ち越さない(store: FailureStore, created: CreatedStore) -> None:
+    server = FakePaperless([_doc(100)])
+    claude = CrashingClaude({0, 1}, ok(_answer()))
+    run_cycle(server.client(), claude.client(), store, created, today=TODAY)
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
+    assert r == CycleResult(retried=1)
+    assert store.count(100) == 2
