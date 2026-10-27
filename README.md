@@ -26,6 +26,10 @@ flowchart LR
 
 詳しくは [`docs/design.md`](docs/design.md) を見てください。
 
+## セットアップ
+
+[`docs/setup.md`](docs/setup.md) と配置例の [`compose.example.yaml`](compose.example.yaml) を見てください。
+
 ## 開発
 
 [`CONTRIBUTING.md`](CONTRIBUTING.md) と [`AGENTS.md`](AGENTS.md) を見てください。

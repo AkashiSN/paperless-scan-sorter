@@ -35,3 +35,20 @@ jobs:
 
       - name: pytest
         run: uv run pytest -q
+
+  image:
+    name: image (docker build)
+    needs: python
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      # 公開はしない。Dockerfile が壊れていないことだけを確かめる。
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: false
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -1,0 +1,67 @@
+# Paperless-ngx 一式と ai-classifier の配置例（設計書 9 章）。
+# `.env.example` を `.env` にコピーして値を入れ、必要に応じて直して使う。
+#   docker compose -f compose.example.yaml up -d
+
+services:
+  paperless:
+    # 運用では版を固定する。
+    image: ghcr.io/paperless-ngx/paperless-ngx:latest
+    restart: unless-stopped
+    depends_on:
+      - db
+      - broker
+    ports:
+      - "${PAPERLESS_PORT}:8000"
+    volumes:
+      - ${PAPERLESS_ROOT}/consume:/usr/src/paperless/consume
+      - ${PAPERLESS_ROOT}/media:/usr/src/paperless/media
+      - ${PAPERLESS_ROOT}/data:/usr/src/paperless/data
+      - ${PAPERLESS_ROOT}/export:/usr/src/paperless/export
+    environment:
+      PAPERLESS_REDIS: redis://broker:6379
+      PAPERLESS_DBHOST: db
+      PAPERLESS_DBPASS: ${DB_PASSWORD}
+      PAPERLESS_SECRET_KEY: ${PAPERLESS_SECRET_KEY}
+      PAPERLESS_OCR_LANGUAGE: jpn+eng
+      PAPERLESS_OCR_LANGUAGES: jpn
+      PAPERLESS_OCR_MODE: skip
+      PAPERLESS_TIME_ZONE: ${TZ}
+      # 配置は 発行元/年/日付_タイトル（設計書 8 章）。
+      PAPERLESS_FILENAME_FORMAT: '{% if correspondent and correspondent != "none" %}{{ correspondent }}{% else %}未分類{% endif %}/{{ created_year }}/{{ created }}_{{ title }}'
+      # 除外用サブフォルダ（private/）を見るため。
+      PAPERLESS_CONSUMER_RECURSIVE: "true"
+      # SMB 経由の書き込みは inotify で拾えない場合があるため、ポーリングする。
+      PAPERLESS_CONSUMER_POLLING: "60"
+      USERMAP_UID: ${USERMAP_UID}
+      USERMAP_GID: ${USERMAP_GID}
+
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    volumes:
+      - ${PAPERLESS_ROOT}/pgdata:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: paperless
+      POSTGRES_USER: paperless
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+
+  broker:
+    image: redis:8
+    restart: unless-stopped
+
+  ai-classifier:
+    # イメージの公開はまだ整えていないので、このリポジトリからビルドする。
+    build: .
+    restart: unless-stopped
+    depends_on:
+      - paperless
+    volumes:
+      # コンテナ内のユーザーは UID/GID 1000。ホスト側のディレクトリを書き込めるようにしておく。
+      - ${PAPERLESS_ROOT}/classifier:/state
+    environment:
+      PAPERLESS_URL: http://paperless:8000
+      PAPERLESS_TOKEN: ${PAPERLESS_TOKEN}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN}
+      INTERVAL: ${INTERVAL:-300}
+      CLAUDE_MODEL: ${CLAUDE_MODEL:-sonnet}
+      CLAUDE_TIMEOUT: ${CLAUDE_TIMEOUT:-300}
