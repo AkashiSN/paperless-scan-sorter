@@ -15,5 +15,13 @@ STATE_TAGS: frozenset[str] = frozenset(
     {INBOX, PAGE_TODO, PAGE_REVIEW, AI_TODO, AI_DONE, AI_REVIEW, AI_FAILED}
 )
 
-# ai-classifier が付け外しするタグ。起動時に Paperless に存在することを確かめる。
-REQUIRED_TAGS: tuple[str, ...] = (INBOX, AI_TODO, AI_DONE, AI_REVIEW, AI_FAILED)
+# ai-classifier とページ整形が付け外しするタグ。起動時に Paperless に存在することを確かめる。
+REQUIRED_TAGS: tuple[str, ...] = (
+    INBOX,
+    PAGE_TODO,
+    PAGE_REVIEW,
+    AI_TODO,
+    AI_DONE,
+    AI_REVIEW,
+    AI_FAILED,
+)

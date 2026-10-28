@@ -21,5 +21,6 @@ def test_必須タグは状態管理用のタグに含まれる() -> None:
     assert set(tags.REQUIRED_TAGS) <= tags.STATE_TAGS
 
 
-def test_必須タグはai_classifierが付け外しする5つ() -> None:
-    assert tags.REQUIRED_TAGS == ("inbox", "ai-todo", "ai-done", "ai-review", "ai-failed")
+def test_必須タグは状態管理用のタグ7つすべて() -> None:
+    assert set(tags.REQUIRED_TAGS) == tags.STATE_TAGS
+    assert len(tags.REQUIRED_TAGS) == 7

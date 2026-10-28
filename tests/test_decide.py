@@ -9,7 +9,7 @@ from paperless_scan_sorter.decide import Decision, TagIds, decide, failed_tags
 from paperless_scan_sorter.paperless import Document, Named
 from paperless_scan_sorter.validate import Classification
 
-IDS = TagIds(inbox=1, ai_todo=2, ai_done=3, ai_review=4, ai_failed=5)
+IDS = TagIds(inbox=1, ai_todo=2, ai_done=3, ai_review=4, ai_failed=5, page_todo=6, page_review=7)
 CORR = [Named(10, "○○銀行")]
 TYPES = [Named(20, "取引報告書")]
 TAGN = {"銀行": 30, "保険": 31}
