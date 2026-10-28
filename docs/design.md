@@ -300,7 +300,7 @@ Paperless-ngx 一式と ai-classifier を、TrueNAS の 1 つのカスタムア�
 | `paperless` | `ghcr.io/paperless-ngx/paperless-ngx` | `PAPERLESS_OCR_LANGUAGE=jpn+eng`、`PAPERLESS_OCR_LANGUAGES=jpn`、`PAPERLESS_OCR_MODE=skip`、`PAPERLESS_TIME_ZONE`（利用者のタイムゾーン）、`PAPERLESS_FILENAME_FORMAT`（8 章）、`PAPERLESS_CONSUMER_RECURSIVE=true`（除外用サブフォルダのため）、`PAPERLESS_CONSUMER_POLLING=60`（SMB 経由の書き込みは inotify で拾えない場合があるため）、`USERMAP_UID`/`USERMAP_GID` |
 | `db` | `postgres` | Paperless 専用 |
 | `broker` | `redis` | Paperless のタスクキュー |
-| `ai-classifier` | このリポジトリ（Python ＋ Claude Code CLI。ページ整形用に poppler と tesseract を含む） | `PAPERLESS_URL`、`PAPERLESS_TOKEN`（専用ユーザーの API トークン。`PAPERLESS_TOKEN_FILE` でファイルから読むこともできる）、`CLAUDE_CODE_OAUTH_TOKEN`、`INTERVAL=300`、`STATE_DIR=/state`、`CLAUDE_MODEL=sonnet`、`CLAUDE_TIMEOUT=300`（秒）、`TZ`（Paperless と同じタイムゾーン。`created` の未来日判定の「今日」に使う） |
+| `ai-classifier` | `ghcr.io/akashisn/paperless-scan-sorter`（このリポジトリの CI が main とタグから作る。Python ＋ Claude Code CLI。ページ整形用に poppler と tesseract を含む） | `PAPERLESS_URL`、`PAPERLESS_TOKEN`（専用ユーザーの API トークン。`PAPERLESS_TOKEN_FILE` でファイルから読むこともできる）、`CLAUDE_CODE_OAUTH_TOKEN`、`INTERVAL=300`、`STATE_DIR=/state`、`CLAUDE_MODEL=sonnet`、`CLAUDE_TIMEOUT=300`（秒）、`TZ`（Paperless と同じタイムゾーン。`created` の未来日判定の「今日」に使う） |
 
 - ai-classifier には Paperless 用の専用ユーザーを作る。権限は、書類とタグの閲覧・変更、発行元と文書タイプの閲覧・変更・追加（新規作成のため）だけにする
 - ページ整形の `edit_pdf` は、書類の変更権限に加えて、書類の所有者が無いか ai-classifier のユーザー自身であることを求める（Paperless-ngx 3.3.4 で確認）。満たさない書類は 403 になり、`page-review` を付けて分類へ進む（6.3）。取り込み時のワークフローでは所有者を設定しないか、ai-classifier のユーザーにする

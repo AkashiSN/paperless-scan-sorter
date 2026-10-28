@@ -1,6 +1,9 @@
 # Paperless-ngx 一式と ai-classifier の配置例（設計書 9 章）。
 # `.env.example` を `.env` にコピーして値を入れ、必要に応じて直して使う。
 #   docker compose -f compose.example.yaml up -d
+#
+# ai-classifier のイメージは ghcr.io で公開している。`latest` は `main` の先頭を指すので、
+# 版を固定したいときは `:sha-1234567` のようにコミットのタグを書く。
 
 services:
   paperless:
@@ -61,8 +64,8 @@ services:
     restart: unless-stopped
 
   ai-classifier:
-    # イメージの公開はまだ整えていないので、このリポジトリからビルドする。
-    build: .
+    image: ghcr.io/akashisn/paperless-scan-sorter:latest
+    # 手元の変更を試すときは、上の image の代わりに `build: .` でこのリポジトリからビルドする。
     restart: unless-stopped
     # Paperless の API が応答してから起動する。起動直後の周期が打ち切られて INTERVAL 分
     # 待たされるのを避けるため。
