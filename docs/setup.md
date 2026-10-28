@@ -92,7 +92,7 @@ docker compose -f compose.example.yaml run --rm ai-classifier --once
 - 終了コード 2: 環境変数の不備。ログに出るのは変数名だけ（値は出さない）。`PAPERLESS_URL`・`PAPERLESS_TOKEN`・`CLAUDE_CODE_OAUTH_TOKEN` を確かめる
 - 終了コード 1: 状態管理用のタグが足りない。ログに足りないタグ名が出る。`--once` では、ページ整形か分類の周期で想定外の例外が出たときも 1 で終わる（ログに例外が出る。片方が例外で止まっても、もう片方は回す）。常駐ループでは、タグ不足のときだけ 1 で止まり、想定外の例外はログに出して次の周期へ進む
 - `aborted=True` でその周期が打ち切られている: 利用枠の上限、認証エラー、ネットワーク障害のどれか。書類は `ai-todo` のまま残る。ログを見て、トークンと接続先を確かめる
-- ページ整形の `aborted=True`: Paperless に繋がらない、認証エラー、`/state/originals/` に書けない、のどれか。書類は `page-todo` のまま残る。分類の周期はそのまま回る
+- ページ整形の `aborted=True`: Paperless に繋がらない、認証エラー、`/state/originals/` に書けない、poppler・tesseract のコマンドが見つからない、のどれか。書類は `page-todo` のまま残る。分類の周期はそのまま回る
 - ページ整形で直した書類は、元の PDF が `/state/originals/{書類ID}.pdf` に残る（90 日で消える）
 - 書類の `ai-todo` が `ai-done` か `ai-review` に変わり、タイトル・発行元・文書タイプ・書類日付が入っていることを Web UI で確かめる。ディスク上では `発行元/年/日付_タイトル.pdf` に移っている
 
