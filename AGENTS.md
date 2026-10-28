@@ -83,7 +83,7 @@ uv run ruff format --check .
   `.worktrees/` は追跡しない。マージしたら worktree とブランチを消す
 - ブランチ名: `feat/<topic>`、`fix/<topic>`、`docs/<topic>`、`chore/<topic>`、`refactor/<topic>`
   （Issue があれば `feat/<issue#>-<topic>`）
-- `main` へは PR で入れ、squash merge する。CI が通っていること
+- `main` へは PR で入れる。CI が通っていること
 - 振る舞いを変える PR は、同じ PR で `docs/design.md` を直す。設計と実装を食い違わせない
 
 ## コミット
