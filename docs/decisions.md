@@ -232,3 +232,14 @@ CLI が返すエラーの正確な文面は確かめていない。文面が違�
 `v*` のタグでは、イメージを公開した後に GitHub Release を作り、変更点をコミットから自動で書く。`v1.2.0-rc.1` のようにハイフンを含むタグ（rc など）は prerelease にし、「Latest」に出さない。イメージの側でも、rc には `1.2.0-rc.1` だけを付け、`1.2` と `latest` は動かさない。
 
 **選ばなかった案:** タグを打ったときだけ公開する案は、リリースの手順を決める前から本番に置けない。rc を別のタグ名の規則（`rc-*` など）にする案は、SemVer の順序で比べられなくなる。arm64 も作る案は、配置先が x86_64 だけなのにビルド時間が増える。
+
+## D-019: Paperless-ngx は ai-classifier と同じ TrueNAS の Custom App に入れる
+
+- 日付: 2026-10-28
+- 状態: 採用
+
+**背景:** 設計書 12 章の未決事項。Paperless-ngx を TrueNAS の公式アプリで入れ、ai-classifier だけを別の Custom App にするか、Paperless 一式と ai-classifier を 1 つの Custom App（Compose）にまとめるか。
+
+**判断:** 1 つの Custom App にまとめ、`compose.example.yaml` をそのまま使う。ai-classifier は Paperless の healthcheck を待って起動する（`depends_on: condition: service_healthy`）必要があり、同じ Compose の中でしか書けない。サービス名（`http://paperless:8000`）で届くので、ネットワークの設定も要らない。手元の Docker Compose で試した構成と本番の構成が同じになる。Install via YAML は `.env` を読まないので、`${...}` は貼り付けるときに値へ置き換える（[`truenas.md`](truenas.md) 手順 5）。
+
+**選ばなかった案:** 公式アプリと別アプリに分ける案は、Paperless の更新が画面から楽になる代わりに、アプリ間のネットワークと起動順を自分で合わせる必要があり、ボリュームの配置も公式アプリの作りに縛られる。

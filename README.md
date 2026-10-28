@@ -29,7 +29,7 @@ flowchart LR
 
 ## セットアップ
 
-[`docs/setup.md`](docs/setup.md) と配置例の [`compose.example.yaml`](compose.example.yaml) を見てください。
+TrueNAS SCALE に置くなら [`docs/truenas.md`](docs/truenas.md)、Docker Compose で動かすなら [`docs/setup.md`](docs/setup.md) を見てください。配置例は [`compose.example.yaml`](compose.example.yaml) です。
 
 ## 開発
 

@@ -2,6 +2,8 @@
 
 Paperless-ngx と ai-classifier を Docker Compose で動かし、最初の書類を分類するまでの手順。構成の理由は [`design.md`](design.md) の 5・8・9・10 章にある。
 
+TrueNAS SCALE の Custom App として置くときは [`truenas.md`](truenas.md) を見る。ここでは `.env` を使って Docker Compose で動かす手順を書く。
+
 ## 1. 配置例を用意する
 
 ```bash

@@ -273,7 +273,7 @@ claude -p --model sonnet --max-turns 3 --output-format json --no-session-persist
 
 ## 9. デプロイ構成（TrueNAS）
 
-Paperless-ngx 一式と ai-classifier を、TrueNAS の 1 つのカスタムアプリ（Docker Compose）として動かす。データはすべて ZFS データセットに置き、スナップショットの対象にする。
+Paperless-ngx 一式と ai-classifier を、TrueNAS の 1 つのカスタムアプリ（Docker Compose）として動かす。導入手順は [`truenas.md`](truenas.md) にある。データはすべて ZFS データセットに置き、スナップショットの対象にする。
 
 ### データセット
 
@@ -353,7 +353,7 @@ Drive への同期は閲覧用で、SYNC モードなので Paperless 側の削�
 
 ### 未決事項
 
-- [ ] Paperless-ngx を TrueNAS の公式アプリで入れるか、カスタムアプリ（Compose）で ai-classifier と一緒に管理するか
+- [x] Paperless-ngx を TrueNAS の公式アプリで入れるか、カスタムアプリ（Compose）で ai-classifier と一緒に管理するか → カスタムアプリで一緒に管理する（[D-019](decisions.md)、手順は [`truenas.md`](truenas.md)）
 - [ ] 既存のクラウドストレージ上のスキャン書類を Paperless に取り込み直すか（取り込むなら ai-classifier で一括処理）
 - [ ] 初期の文書タイプとタグの一覧（例: 請求書、契約書、保証書、税・役所、保険、銀行）
 - [ ] Claude に送らない書類の範囲（除外方法は 10 章の `private/` フォルダ）
