@@ -55,7 +55,7 @@ Web UI（`http://<ホスト>:<PAPERLESS_PORT>`）で管理者としてログイ�
 
 ページ整形（設計書 6.3）を使うときは、`ai-todo` の代わりに `page-todo` を付ける。ai-classifier が白紙・重複・向きを直してから `ai-todo` に付け替える。ページ整形の `edit_pdf` は、書類の所有者が無いか ai-classifier のユーザー自身であることを求める。ワークフローで所有者を設定しないか、所有者を ai-classifier のユーザーにする。条件に合わない書類は直されず、`page-review` が付いて分類へ進む。
 
-**`private/` を除外する。** マイナンバーや医療関係など Claude に送りたくない書類は、スキャナーの別プロファイルで `scans-inbox/private/` に保存する。ワークフローの `filter_path` はワイルドカードの一致だけで否定を書けないので、`ai-todo` を付けるワークフローは通常のスキャンだけに一致するパスにする。テスト用の PDF を `private/` に置き、`ai-todo` が付かないことを必ず確かめる。
+**`private/` を除外する。** マイナンバーや医療関係など Claude に送りたくない書類は、スキャナーの別プロファイルで `scans-inbox/private/` に保存する。ワークフローの `filter_path` はワイルドカードの一致だけで否定を書けないので、`ai-todo` を付けるワークフローは通常のスキャンだけに一致するパスにする。ページ整形を使うときは、`page-todo` を付けるワークフローの `filter_path` も同じように合わせる（`page-todo` の書類は、整形の後に ai-classifier が `ai-todo` を付けるため）。テスト用の PDF を `private/` に置き、`page-todo` も `ai-todo` も付かないことを必ず確かめる。
 
 **ai-classifier 用のユーザーを作る。** 管理者とは別に、次の権限だけを持つユーザーを作る。
 
