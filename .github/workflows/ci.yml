@@ -90,3 +90,20 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  release:
+    name: release (GitHub Release)
+    # v* のタグのときだけ、イメージを公開した後に Release を作る。
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Release を作る
+        uses: softprops/action-gh-release@v3
+        with:
+          generate_release_notes: true
+          # `v1.2.0-rc.1` のようにハイフンを含むタグは prerelease にし、「Latest」に出さない。
+          # イメージの側も、rc では `1.2` と `latest` を動かさない（metadata-action の semver の扱い）。
+          prerelease: ${{ contains(github.ref_name, '-') }}
