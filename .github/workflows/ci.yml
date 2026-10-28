@@ -1,14 +1,20 @@
 name: CI
 
+# main と v* のタグへの push ではイメージを ghcr.io に公開する。PR ではビルドだけを確かめる。
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
 
-# 同じ ref の古い run は取り消す。まだ何も公開しないので、途中で止めても困らない。
+# 同じ ref の古い run は、PR なら取り消す。公開する run は取り消さずに順番待ちにする。
+# 後から来たコミットが最後に公開するので、待たせても `latest` は main の先頭を指す。
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  REGISTRY: ghcr.io
 
 permissions:
   contents: read
@@ -42,17 +48,45 @@ jobs:
 
   image:
     name: image (docker build)
+    # 公開する前にテストを通す。通らないものを配らない。
     needs: python
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v7
 
       - uses: docker/setup-buildx-action@v4
 
-      # 公開はしない。Dockerfile が壊れていないことだけを確かめる。
-      - uses: docker/build-push-action@v7
+      - name: ghcr にログインする
+        if: github.event_name == 'push'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: タグを決める
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short
+            # `latest` は main の先頭。版を固定したいときは `:sha-1234567` を使う。
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      # amd64 だけを作る。配置先の TrueNAS SCALE は x86_64 が前提。
+      - name: ビルドする（push のときは公開する）
+        uses: docker/build-push-action@v7
         with:
           context: .
-          push: false
+          platforms: linux/amd64
+          push: ${{ github.event_name == 'push' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
