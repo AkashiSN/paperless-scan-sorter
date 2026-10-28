@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import pytest
+
 from paperless_scan_sorter.pageplan import PageAction, PageInfo, PagePlan, plan_pages
 
-TEXT40 = "これは同じ内容の本文です。" * 4  # 20 文字以上
-OTHER40 = "ABCDEFGHIJ" * 4
+TEXT_A = "これは同じ内容の本文です。" * 4  # 20 文字以上の本文
+TEXT_B = "ABCDEFGHIJ" * 4
 
 
 def _p(
@@ -52,14 +54,14 @@ def test_インクが少し多ければ確認に回す() -> None:
 
 
 def test_同じ内容の連続ページは後ろを削除する() -> None:
-    plan = plan_pages([_p(1), _p(2, text=TEXT40, dhash=0), _p(3, text=TEXT40, dhash=0b11)])
+    plan = plan_pages([_p(1), _p(2, text=TEXT_A, dhash=0), _p(3, text=TEXT_A, dhash=0b11)])
     assert plan.operations == [{"page": 1}, {"page": 2}]
     assert _acts(plan) == [(3, "delete", "重複（2 ページ目と）")]
     assert "dist=2" in plan.actions[0].detail
 
 
 def test_書式だけ同じ別ページは確認に回す() -> None:
-    plan = plan_pages([_p(1, text=TEXT40, dhash=0), _p(2, text=OTHER40, dhash=0b11)])
+    plan = plan_pages([_p(1, text=TEXT_A, dhash=0), _p(2, text=TEXT_B, dhash=0b11)])
     assert plan.operations is None
     assert _acts(plan) == [(2, "review", "重複（1 ページ目と）")]
 
@@ -134,3 +136,73 @@ def test_削除を取りやめても回転は行う() -> None:
 
 def test_PageAction_は値で比較できる() -> None:
     assert PageAction(1, "delete", "白紙", "x") == PageAction(1, "delete", "白紙", "x")
+
+
+def test_ちょうど_2_ページの削除は行う() -> None:
+    plan = plan_pages([_p(1), _p(2, 0.001, ""), _p(3, 0.001, "")])
+    assert plan.operations == [{"page": 1}]
+    assert _acts(plan) == [(2, "delete", "白紙"), (3, "delete", "白紙")]
+
+
+def test_種類の違う削除候補が合わせて_3_ページなら全て確認に回す() -> None:
+    plan = plan_pages(
+        [
+            _p(1),
+            _p(2, 0.001, ""),
+            _p(3, 0.001, ""),
+            _p(4, text=TEXT_A, dhash=0),
+            _p(5, text=TEXT_A, dhash=0b11),
+        ]
+    )
+    assert plan.operations is None
+    assert _acts(plan) == [
+        (2, "review", "白紙"),
+        (3, "review", "白紙"),
+        (5, "review", "重複（4 ページ目と）"),
+    ]
+
+
+def test_重複は削除したページではなく直前に残すページと比べる() -> None:
+    plan = plan_pages(
+        [
+            _p(1),
+            _p(2, text=TEXT_A, dhash=0),
+            _p(3, text=TEXT_A, dhash=0b11),
+            _p(4, text=TEXT_A, dhash=0b111100),  # 2 とは距離 4、3 とは距離 6
+        ]
+    )
+    assert plan.operations == [{"page": 1}, {"page": 2}]
+    assert _acts(plan) == [
+        (3, "delete", "重複（2 ページ目と）"),
+        (4, "delete", "重複（2 ページ目と）"),
+    ]
+
+
+def test_白紙で確認に回したページも直前に残すページとして比べる() -> None:
+    far = (1 << 32) - 1
+    plan = plan_pages(
+        [
+            _p(1, text=TEXT_A, dhash=0),
+            _p(2, ink=0.006, text="", dhash=far),
+            _p(3, text=TEXT_A, dhash=far ^ 0b11),
+        ]
+    )
+    assert plan.operations is None
+    assert _acts(plan) == [(2, "review", "白紙"), (3, "review", "重複（2 ページ目と）")]
+
+
+def test_ページ番号が重複していれば_ValueError() -> None:
+    with pytest.raises(ValueError):
+        plan_pages([_p(1, 0.001, ""), _p(1, 0.001, "")])
+
+
+def test_ページが空なら何もしない() -> None:
+    plan = plan_pages([])
+    assert plan.operations is None
+    assert plan.review is False
+
+
+def test_90_180_270_以外の角度は判定不能として扱う() -> None:
+    plan = plan_pages([_p(1, rotate=45, conf=9.0), _p(2, rotate=360, conf=3.0)])
+    assert plan.operations is None
+    assert plan.actions == ()

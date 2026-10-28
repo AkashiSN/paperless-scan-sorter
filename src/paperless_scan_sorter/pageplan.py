@@ -43,6 +43,8 @@ class Thresholds:
 
 @dataclass(frozen=True)
 class PageAction:
+    """1 ページに対する処置とその理由。ログに残す。"""
+
     page: int
     action: str  # "delete" | "rotate" | "review"
     reason: str  # 例 "白紙", "重複（3 ページ目と）", "向き"
@@ -51,6 +53,8 @@ class PageAction:
 
 @dataclass(frozen=True)
 class PagePlan:
+    """書類全体の整形計画。review が真なら人の確認（page-review）が要る。"""
+
     # 変更が無ければ None。あれば edit_pdf にそのまま渡す
     operations: list[dict[str, int]] | None
     actions: tuple[PageAction, ...]
@@ -67,11 +71,19 @@ DEFAULT_THRESHOLDS = Thresholds()
 
 def plan_pages(pages: Sequence[PageInfo], t: Thresholds = DEFAULT_THRESHOLDS) -> PagePlan:
     """各ページの処置を決め、残すページの operations と判定理由を返す。"""
+    if len({p.number for p in pages}) != len(pages):
+        raise ValueError("ページ番号が重複している")
     texts = {p.number: _squash(p.text) for p in pages}
     # ページ番号 -> 処置の並び。最後にページ順へ並べて出す
     per_page: dict[int, list[PageAction]] = {p.number: [] for p in pages}
     candidates: dict[int, PageAction] = {}  # 削除候補（理由は安全策で取り消すときも使う）
     kept: PageInfo | None = None  # 直前の残すページ
+
+    def cancel_deletions() -> None:
+        """削除候補をすべて、元の理由を残した review に置き換える。"""
+        for n, a in candidates.items():
+            per_page[n].append(PageAction(n, "review", a.reason, a.detail))
+        candidates.clear()
 
     for p in pages:
         chars = len(texts[p.number])
@@ -105,16 +117,14 @@ def plan_pages(pages: Sequence[PageInfo], t: Thresholds = DEFAULT_THRESHOLDS) ->
     if candidates and (
         len(pages) == 1 or len(candidates) > t.max_deletions or len(candidates) == len(pages)
     ):
-        for n, a in candidates.items():
-            per_page[n].append(PageAction(n, "review", a.reason, a.detail))
-        candidates = {}
+        cancel_deletions()
     else:
         for n, a in candidates.items():
             per_page[n].append(a)
 
     rotations: dict[int, int] = {}
     for p in pages:
-        if p.number in candidates or not p.rotate:
+        if p.number in candidates or p.rotate not in (90, 180, 270):
             continue
         detail = f"rotate={p.rotate} conf={p.rotate_confidence:.1f}"
         if p.rotate_confidence >= t.rotate_confidence_min:
@@ -123,7 +133,6 @@ def plan_pages(pages: Sequence[PageInfo], t: Thresholds = DEFAULT_THRESHOLDS) ->
         elif p.rotate_confidence >= t.rotate_confidence_review_min:
             per_page[p.number].append(PageAction(p.number, "review", "向き", detail))
 
-    actions = tuple(a for n in sorted(per_page) for a in per_page[n])
     operations: list[dict[str, int]] | None = None
     if candidates or rotations:
         operations = []
@@ -134,4 +143,15 @@ def plan_pages(pages: Sequence[PageInfo], t: Thresholds = DEFAULT_THRESHOLDS) ->
             if p.number in rotations:
                 op["rotate"] = rotations[p.number]
             operations.append(op)
+        # 防御: 全ページを捨てる operations は決して返さない
+        if not operations:
+            cancel_deletions()
+            operations = [
+                {
+                    "page": p.number,
+                    **({"rotate": rotations[p.number]} if p.number in rotations else {}),
+                }
+                for p in pages
+            ]
+    actions = tuple(a for n in sorted(per_page) for a in per_page[n])
     return PagePlan(operations, actions, any(a.action == "review" for a in actions))
