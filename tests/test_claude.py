@@ -115,7 +115,18 @@ def test_プロンプトは区切りの後に置き可変長の引数に飲ま�
     make(rec).classify_text("-p から始まる文", "c")
     assert rec.argv[-2:] == ["--", "-p から始まる文"]
     make(rec).classify_pdf("-p から始まる文", b"%PDF")
-    assert rec.argv[-2:] == ["--", "-p から始まる文"]
+    assert rec.argv[-2] == "--"
+    assert rec.argv[-1].startswith("-p から始まる文")
+
+
+def test_PDFはプロンプトでそのファイルの絶対パスを伝える() -> None:
+    rec = Recorder()
+    make(rec).classify_pdf("p", b"%PDF")
+    pdf = rec.cwd / "doc.pdf"
+    prompt = rec.argv[-1]
+    assert prompt.startswith("p\n")
+    assert str(pdf) in prompt
+    assert pdf.is_absolute()
 
 
 def test_作業ディレクトリは毎回空の一時ディレクトリ() -> None:
@@ -157,7 +168,7 @@ def test_PDFはそのファイルだけ読ませる() -> None:
     assert rec.argv == [
         "claude", "-p", "--model", "sonnet", "--max-turns", "3",
         "--output-format", "json", *LOCKDOWN, "--tools", "Read",
-        "--allowedTools", f"Read(/{pdf})", "--", "p",
+        "--allowedTools", f"Read(/{pdf})", "--", rec.argv[-1],
     ]  # fmt: skip
     # 権限ルールの `/path` は設定ディレクトリからの相対で、絶対パスは `//path` と書く。
     rule = rec.argv[rec.argv.index("--allowedTools") + 1]

@@ -105,6 +105,8 @@ class ClaudeClient:
             # 権限ルールの `/path` は設定ディレクトリからの相対になる。絶対パスは
             # `//path` と書くので、絶対パスの前にもう 1 つ `/` を付ける。使えるツールは
             # --tools で Read だけにし、--allowedTools でそのファイルの読み取りだけを許可する。
+            # stdin は使わないので、読むファイルの場所はプロンプトの末尾で伝える。
+            prompt = f"{prompt}\n書類の PDF は {path} にあります。Read ツールで読んでください。"
             argv = [
                 self._executable, "-p", "--model", self._model,
                 "--max-turns", "3", "--output-format", "json", *_LOCKDOWN_ARGS,
