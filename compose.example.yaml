@@ -1,0 +1,83 @@
+# Paperless-ngx 一式と ai-classifier の配置例（設計書 9 章）。
+# `.env.example` を `.env` にコピーして値を入れ、必要に応じて直して使う。
+#   docker compose -f compose.example.yaml up -d
+
+services:
+  paperless:
+    # 運用では版を固定する。
+    image: ghcr.io/paperless-ngx/paperless-ngx:latest
+    restart: unless-stopped
+    depends_on:
+      - db
+      - broker
+    # Web が応答するまで（初回はマイグレーションが終わるまで）healthy にしない。イメージにも
+    # 同じ HEALTHCHECK があるが、ai-classifier が待つ条件なのでここに明記する。start_period の
+    # 間の失敗は数えないので、初回のマイグレーションが長くても unhealthy にならない。
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "-S", "-L", "--max-time", "2", "http://localhost:8000"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 5m
+    ports:
+      # 既定では全インターフェースに公開する。LAN だけで使うなら
+      # "<LAN 側の IP>:${PAPERLESS_PORT}:8000" のように公開先のアドレスを限る。
+      - "${PAPERLESS_PORT}:8000"
+    volumes:
+      - ${PAPERLESS_ROOT}/consume:/usr/src/paperless/consume
+      - ${PAPERLESS_ROOT}/media:/usr/src/paperless/media
+      - ${PAPERLESS_ROOT}/data:/usr/src/paperless/data
+      - ${PAPERLESS_ROOT}/export:/usr/src/paperless/export
+    environment:
+      PAPERLESS_REDIS: redis://broker:6379
+      PAPERLESS_DBHOST: db
+      PAPERLESS_DBPASS: ${DB_PASSWORD}
+      PAPERLESS_SECRET_KEY: ${PAPERLESS_SECRET_KEY}
+      PAPERLESS_OCR_LANGUAGE: jpn+eng
+      PAPERLESS_OCR_LANGUAGES: jpn
+      PAPERLESS_OCR_MODE: skip
+      PAPERLESS_TIME_ZONE: ${TZ}
+      # 配置は 発行元/年/日付_タイトル（設計書 8 章）。
+      PAPERLESS_FILENAME_FORMAT: '{% if correspondent and correspondent != "none" %}{{ correspondent }}{% else %}未分類{% endif %}/{{ created_year }}/{{ created }}_{{ title }}'
+      # 除外用サブフォルダ（private/）を見るため。
+      PAPERLESS_CONSUMER_RECURSIVE: "true"
+      # SMB 経由の書き込みは inotify で拾えない場合があるため、ポーリングする。
+      PAPERLESS_CONSUMER_POLLING: "60"
+      USERMAP_UID: ${USERMAP_UID}
+      USERMAP_GID: ${USERMAP_GID}
+
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    volumes:
+      - ${PAPERLESS_ROOT}/pgdata:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: paperless
+      POSTGRES_USER: paperless
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+
+  broker:
+    image: redis:8
+    restart: unless-stopped
+
+  ai-classifier:
+    # イメージの公開はまだ整えていないので、このリポジトリからビルドする。
+    build: .
+    restart: unless-stopped
+    # Paperless の API が応答してから起動する。起動直後の周期が打ち切られて INTERVAL 分
+    # 待たされるのを避けるため。
+    depends_on:
+      paperless:
+        condition: service_healthy
+    volumes:
+      # コンテナ内のユーザーは UID/GID 1000。ホスト側のディレクトリを書き込めるようにしておく。
+      - ${PAPERLESS_ROOT}/classifier:/state
+    environment:
+      PAPERLESS_URL: http://paperless:8000
+      PAPERLESS_TOKEN: ${PAPERLESS_TOKEN}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN}
+      INTERVAL: ${INTERVAL:-300}
+      CLAUDE_MODEL: ${CLAUDE_MODEL:-sonnet}
+      CLAUDE_TIMEOUT: ${CLAUDE_TIMEOUT:-300}
+      # created の未来日判定に使う「今日」を Paperless と同じタイムゾーンにする。
+      TZ: ${TZ}
