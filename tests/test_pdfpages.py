@@ -108,7 +108,7 @@ def _fake_runner(
 
     def runner(argv, cwd):  # noqa: ANN001, ANN202
         calls.append(list(argv))
-        name = argv[1] if argv[0] in ("pdfinfo",) else argv[-2]
+        name = argv[1] if argv[0] == "pdfinfo" else argv[-2]
         if argv[0] == "pdfinfo":
             return _ok(f"Pages:          {pages_by_file[name]}\n".encode())
         if argv[0] == "pdftoppm":
@@ -159,6 +159,40 @@ def test_text_pdfが読めなければテキストは全部空にして続ける
     def runner(argv, cwd):  # noqa: ANN001, ANN202
         if argv[0] == "pdftotext" and argv[-2] == "text.pdf":
             return _ok(returncode=1)
+        return base(argv, cwd)
+
+    with caplog.at_level(logging.WARNING):
+        infos = analyze_pdf(b"img", text_pdf=b"txt", runner=runner)
+    assert [i.text for i in infos] == ["", ""]
+    assert "テキスト用の PDF" in caplog.text
+
+
+def test_text_pdfのpdfinfoにPages行が無ければテキストは全部空にして続ける(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    calls: list[list[str]] = []
+    base = _fake_runner({"doc.pdf": 2, "text.pdf": 2}, {"doc.pdf": b"a\fb\f"}, calls)
+
+    def runner(argv, cwd):  # noqa: ANN001, ANN202
+        if argv[0] == "pdfinfo" and argv[1] == "text.pdf":
+            return _ok(b"Title: x\n")
+        return base(argv, cwd)
+
+    with caplog.at_level(logging.WARNING):
+        infos = analyze_pdf(b"img", text_pdf=b"txt", runner=runner)
+    assert [i.text for i in infos] == ["", ""]
+    assert "テキスト用の PDF" in caplog.text
+
+
+def test_text_pdfのpdfinfoがタイムアウトしてもテキストは全部空にして続ける(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    calls: list[list[str]] = []
+    base = _fake_runner({"doc.pdf": 2, "text.pdf": 2}, {"doc.pdf": b"a\fb\f"}, calls)
+
+    def runner(argv, cwd):  # noqa: ANN001, ANN202
+        if argv[0] == "pdfinfo" and argv[1] == "text.pdf":
+            raise subprocess.TimeoutExpired(argv, 1)
         return base(argv, cwd)
 
     with caplog.at_level(logging.WARNING):

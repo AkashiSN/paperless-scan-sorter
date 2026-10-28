@@ -206,3 +206,18 @@ def test_90_180_270_以外の角度は判定不能として扱う() -> None:
     plan = plan_pages([_p(1, rotate=45, conf=9.0), _p(2, rotate=360, conf=3.0)])
     assert plan.operations is None
     assert plan.actions == ()
+
+
+def test_同じ書式で_1_語だけ違うページは削除せず確認に回す() -> None:
+    a = "見出しはひとつ目です。" + "共通の本文がここに入ります。" * 20
+    b = "見出しはふたつ目です。" + "共通の本文がここに入ります。" * 20
+    plan = plan_pages([_p(1, text=a, dhash=0), _p(2, text=b, dhash=0)])
+    assert plan.operations is None
+    assert _acts(plan) == [(2, "review", "重複（1 ページ目と）")]
+    assert plan.review is True
+
+
+def test_テキストが完全に同じなら空白が違っても削除する() -> None:
+    plan = plan_pages([_p(1, text=TEXT_A, dhash=0), _p(2, text=" ".join(TEXT_A), dhash=0)])
+    assert plan.operations == [{"page": 1}]
+    assert _acts(plan) == [(2, "delete", "重複（1 ページ目と）")]

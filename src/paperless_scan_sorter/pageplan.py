@@ -34,7 +34,7 @@ class Thresholds:
     blank_text_review_max: int = 30
     dup_hash_max: int = 4  # dHash のハミング距離
     dup_hash_review_max: int = 10
-    dup_text_ratio_min: float = 0.95  # SequenceMatcher の ratio（空白を除いた文字列）
+    dup_text_ratio_min: float = 1.0  # SequenceMatcher の ratio。1.0 は空白を除いて完全一致
     dup_text_min_chars: int = 20  # 両ページともこれ以上の文字があるときだけ自動で削除
     rotate_confidence_min: float = 5.0
     rotate_confidence_review_min: float = 1.0

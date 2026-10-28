@@ -123,19 +123,26 @@ def _text_per_page(
     None を返す。本文はログに出さない。
     """
     if not strict:
-        info = _run(runner, ["pdfinfo", name], cwd)
-        if info.returncode != 0:
-            logger.warning("テキスト用の PDF を pdfinfo が読めなかった。テキストを空にする")
+        try:
+            info = _run(runner, ["pdfinfo", name], cwd)
+            if info.returncode != 0:
+                logger.warning("テキスト用の PDF を pdfinfo が読めなかった。テキストを空にする")
+                return None
+            if _pages_in(info.stdout.decode("utf-8", "replace")) != pages:
+                logger.warning("テキスト用の PDF のページ数が合わない。テキストを空にする")
+                return None
+            proc = _run(runner, ["pdftotext", "-enc", "UTF-8", name, "-"], cwd)
+        except DocumentFailure as e:
+            # Pages 行が無い・タイムアウトなど。ServiceUnavailable はそのまま送出する
+            logger.warning("テキスト用の PDF を読めなかった（%s）。テキストを空にする", e)
             return None
-        if _pages_in(info.stdout.decode("utf-8", "replace")) != pages:
-            logger.warning("テキスト用の PDF のページ数が合わない。テキストを空にする")
+        if proc.returncode != 0:
+            logger.warning("テキスト用の PDF を pdftotext が読めなかった。テキストを空にする")
             return None
-    proc = _run(runner, ["pdftotext", "-enc", "UTF-8", name, "-"], cwd)
-    if proc.returncode != 0:
-        if strict:
+    else:
+        proc = _run(runner, ["pdftotext", "-enc", "UTF-8", name, "-"], cwd)
+        if proc.returncode != 0:
             raise DocumentFailure("pdftotext が PDF を読めなかった")
-        logger.warning("テキスト用の PDF を pdftotext が読めなかった。テキストを空にする")
-        return None
     texts = proc.stdout.decode("utf-8", "replace").split("\f")[:pages]
     return texts + [""] * (pages - len(texts))
 
