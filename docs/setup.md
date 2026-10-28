@@ -51,9 +51,11 @@ Web UI（`http://<ホスト>:<PAPERLESS_PORT>`）で管理者としてログイ�
 
 自動マッチは「なし」にする。
 
-**取り込み時のワークフローを作る。** トリガーは「書類が追加された」、アクションは「タグを割り当てる」で `inbox` と `ai-todo` を付ける。ページ整形（6 章）を入れるときは `ai-todo` ではなく `page-todo` にする。
+**取り込み時のワークフローを作る。** トリガーは「書類が追加された」、アクションは「タグを割り当てる」で `inbox` と `ai-todo` を付ける。
 
-**`private/` を除外する。** マイナンバーや医療関係など Claude に送りたくない書類は、スキャナーの別プロファイルで `scans-inbox/private/` に保存する。ワークフローの `filter_path` はワイルドカードの一致だけで否定を書けないので、`ai-todo` を付けるワークフローは通常のスキャンだけに一致するパスにする。テスト用の PDF を `private/` に置き、`ai-todo` が付かないことを必ず確かめる。
+ページ整形（設計書 6.3）を使うときは、`ai-todo` の代わりに `page-todo` を付ける。ai-classifier が白紙・重複・向きを直してから `ai-todo` に付け替える。ページ整形の `edit_pdf` は、書類の所有者が無いか ai-classifier のユーザー自身であることを求める。ワークフローで所有者を設定しないか、所有者を ai-classifier のユーザーにする。条件に合わない書類は直されず、`page-review` が付いて分類へ進む。
+
+**`private/` を除外する。** マイナンバーや医療関係など Claude に送りたくない書類は、スキャナーの別プロファイルで `scans-inbox/private/` に保存する。ワークフローの `filter_path` はワイルドカードの一致だけで否定を書けないので、`ai-todo` を付けるワークフローは通常のスキャンだけに一致するパスにする。ページ整形を使うときは、`page-todo` を付けるワークフローの `filter_path` も同じように合わせる（`page-todo` の書類は、整形の後に ai-classifier が `ai-todo` を付けるため）。テスト用の PDF を `private/` に置き、`page-todo` も `ai-todo` も付かないことを必ず確かめる。
 
 **ai-classifier 用のユーザーを作る。** 管理者とは別に、次の権限だけを持つユーザーを作る。
 
@@ -85,11 +87,13 @@ claude setup-token
 docker compose -f compose.example.yaml run --rm ai-classifier --once
 ```
 
-ログに `周期完了: done=… review=… retried=… failed=… aborted=…` が出れば 1 周期が終わっている。
+1 周期ではページ整形を先に回し、続けて分類を回す。ログに `ページ整形: fixed=… unchanged=… review=… aborted=…` と `周期完了: done=… review=… retried=… failed=… aborted=…` が出れば 1 周期が終わっている。`page-todo` の書類が無ければ、ページ整形の数はすべて 0 になる。
 
 - 終了コード 2: 環境変数の不備。ログに出るのは変数名だけ（値は出さない）。`PAPERLESS_URL`・`PAPERLESS_TOKEN`・`CLAUDE_CODE_OAUTH_TOKEN` を確かめる
-- 終了コード 1: 状態管理用のタグが足りない。ログに足りないタグ名が出る。`--once` では、周期の処理中に想定外の例外が出たときも 1 で終わる（ログに例外が出る）。常駐ループでは、タグ不足のときだけ 1 で止まり、想定外の例外はログに出して次の周期へ進む
+- 終了コード 1: 状態管理用のタグが足りない。ログに足りないタグ名が出る。`--once` では、ページ整形か分類の周期で想定外の例外が出たときも 1 で終わる（ログに例外が出る。片方が例外で止まっても、もう片方は回す）。常駐ループでは、タグ不足のときだけ 1 で止まり、想定外の例外はログに出して次の周期へ進む
 - `aborted=True` でその周期が打ち切られている: 利用枠の上限、認証エラー、ネットワーク障害のどれか。書類は `ai-todo` のまま残る。ログを見て、トークンと接続先を確かめる
+- ページ整形の `aborted=True`: Paperless に繋がらない、認証エラー、`/state/originals/` に書けない、poppler・tesseract のコマンドが見つからない、のどれか。書類は `page-todo` のまま残る。分類の周期はそのまま回る
+- ページ整形で直した書類は、元の PDF が `/state/originals/{書類ID}.pdf` に残る（90 日で消える）
 - 書類の `ai-todo` が `ai-done` か `ai-review` に変わり、タイトル・発行元・文書タイプ・書類日付が入っていることを Web UI で確かめる。ディスク上では `発行元/年/日付_タイトル.pdf` に移っている
 
 ## 5. 常駐させる
@@ -98,6 +102,6 @@ docker compose -f compose.example.yaml run --rm ai-classifier --once
 docker compose -f compose.example.yaml up -d
 ```
 
-既定では 5 分（`INTERVAL=300`）ごとに `ai-todo` の書類を処理する。週に 1 回程度、保存ビュー「確認待ち」（`ai-review`・`page-review`・`ai-failed` のいずれか）を見て直す（設計書 10 章）。
+既定では 5 分（`INTERVAL=300`）ごとに、`page-todo` の書類のページを直してから `ai-todo` の書類を分類する。週に 1 回程度、保存ビュー「確認待ち」（`ai-review`・`page-review`・`ai-failed` のいずれか）を見て直す（設計書 10 章）。
 
 AI が新しく作った発行元・文書タイプの名前が気に入らないときは、削除せずに Paperless の管理画面で名前を変えるか、既存のものに統合する。同じ名前を使う他の書類にもまとめて反映される（[D-006](decisions.md)）。削除すると、その名前を使っていた書類は発行元・文書タイプが空になり、ファイルが `未分類/` に移る。

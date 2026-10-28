@@ -55,6 +55,8 @@ def resolve_tag_ids(tags: Sequence[Named]) -> TagIds:
         ai_done=by_name["ai-done"],
         ai_review=by_name["ai-review"],
         ai_failed=by_name["ai-failed"],
+        page_todo=by_name["page-todo"],
+        page_review=by_name["page-review"],
     )
 
 

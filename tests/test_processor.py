@@ -26,6 +26,7 @@ from paperless_scan_sorter.processor import (
 
 TODAY = date(2026, 10, 27)
 INBOX, AI_TODO, AI_DONE, AI_REVIEW, AI_FAILED = 1, 2, 3, 4, 5
+PAGE_TODO, PAGE_REVIEW = 6, 7
 EXISTING_TAG, CHOSEN_TAG = 99, 30
 DOC_ID = 100
 LONG_TEXT = "請求書の本文です。" * 20
@@ -59,6 +60,8 @@ class FakePaperless:
         self._next_id = 500
         self.tag_rows = [
             {"id": INBOX, "name": "inbox"},
+            {"id": PAGE_TODO, "name": "page-todo"},
+            {"id": PAGE_REVIEW, "name": "page-review"},
             {"id": AI_TODO, "name": "ai-todo"},
             {"id": AI_DONE, "name": "ai-done"},
             {"id": AI_REVIEW, "name": "ai-review"},
@@ -329,13 +332,37 @@ def test_必須タグが無ければ止める() -> None:
     assert "ai-review" in str(e.value)
 
 
+def test_page_todoが無ければ止める() -> None:
+    tags = [
+        Named(i, n)
+        for i, n in enumerate(
+            ["inbox", "page-review", "ai-todo", "ai-done", "ai-review", "ai-failed"], 1
+        )
+    ]
+    with pytest.raises(MissingTagsError) as e:
+        resolve_tag_ids(tags)
+    assert "page-todo" in str(e.value)
+
+
 def test_必須タグがそろえばIDを引く() -> None:
     tags = [
         Named(i, n)
-        for i, n in enumerate(["inbox", "ai-todo", "ai-done", "ai-review", "ai-failed"], 1)
+        for i, n in enumerate(
+            [
+                "inbox",
+                "page-todo",
+                "page-review",
+                "ai-todo",
+                "ai-done",
+                "ai-review",
+                "ai-failed",
+            ],
+            1,
+        )
     ]
     ids = resolve_tag_ids(tags)
-    assert (ids.inbox, ids.ai_todo, ids.ai_done, ids.ai_review, ids.ai_failed) == (1, 2, 3, 4, 5)
+    assert (ids.inbox, ids.ai_todo, ids.ai_done, ids.ai_review, ids.ai_failed) == (1, 4, 5, 6, 7)
+    assert (ids.page_todo, ids.page_review) == (2, 3)
 
 
 def test_ai_failedへのPATCHで利用不可なら周期を打ち切る(

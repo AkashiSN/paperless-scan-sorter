@@ -19,6 +19,8 @@ class TagIds:
     ai_done: int
     ai_review: int
     ai_failed: int
+    page_todo: int
+    page_review: int
 
 
 @dataclass(frozen=True)
