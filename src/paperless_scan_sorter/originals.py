@@ -26,6 +26,10 @@ class OriginalsStore:
     def __init__(self, directory: Path) -> None:
         self._dir = directory
 
+    def has(self, doc_id: int) -> bool:
+        """書類の元の PDF が退避してあるかを返す。"""
+        return (self._dir / f"{doc_id}.pdf").exists()
+
     def save(self, doc_id: int, pdf: bytes) -> None:
         """書類の元の PDF を保存する。既に保存されていれば何もしない。
 

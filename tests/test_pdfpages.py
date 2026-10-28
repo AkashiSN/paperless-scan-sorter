@@ -207,6 +207,30 @@ def test_text_pdfが無ければ画像用のPDFからテキストを取る() -> 
     assert [i.text for i in analyze_pdf(b"img", runner=runner)] == ["a", "b"]
 
 
+def test_text_pdf側でコマンドが無ければServiceUnavailableをそのまま送出する() -> None:
+    calls: list[list[str]] = []
+    base = _fake_runner({"doc.pdf": 2, "text.pdf": 2}, {"doc.pdf": b"a\fb\f"}, calls)
+
+    def runner(argv, cwd):  # noqa: ANN001, ANN202
+        if argv[0] == "pdftotext" and argv[-2] == "text.pdf":
+            raise FileNotFoundError
+        return base(argv, cwd)
+
+    with pytest.raises(ServiceUnavailable):
+        analyze_pdf(b"img", text_pdf=b"txt", runner=runner)
+
+
+def test_OSDを省くしきい値を渡せる() -> None:
+    calls: list[list[str]] = []
+    runner = _fake_runner({"doc.pdf": 2}, {"doc.pdf": b"a\fb\f"}, calls)
+    # 偽の画像は真っ白（インク 0）なので、既定では tesseract を呼ばない
+    analyze_pdf(b"img", runner=runner)
+    assert not any(c[0] == "tesseract" for c in calls)
+    calls.clear()
+    analyze_pdf(b"img", runner=runner, osd_skip_ink=-1.0)
+    assert sum(c[0] == "tesseract" for c in calls) == 2
+
+
 # --- 実物のコマンドを使うテスト ---
 
 _TOOLS = ("pdfinfo", "pdftoppm", "pdftotext", "tesseract")

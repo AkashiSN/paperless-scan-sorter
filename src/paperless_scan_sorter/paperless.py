@@ -147,6 +147,13 @@ class PaperlessClient:
         with _parsing("GET", path):
             return frozenset(v["id"] for v in response.json()["versions"])
 
+    def document_tags(self, doc_id: int) -> frozenset[int]:
+        """書類のいまのタグを返す。タグを置き換える PATCH の直前に読み直すために使う。"""
+        path = f"/api/documents/{doc_id}/"
+        response = self._request("GET", path, document_scoped=True, params={"fields": "tags"})
+        with _parsing("GET", path):
+            return frozenset(response.json()["tags"])
+
     def _named(self, path: str) -> list[Named]:
         rows = self._list_all(path, {"page_size": _PAGE_SIZE})
         with _parsing("GET", path):

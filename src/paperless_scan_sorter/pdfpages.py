@@ -148,13 +148,18 @@ def _text_per_page(
 
 
 def analyze_pdf(
-    pdf: bytes, *, text_pdf: bytes | None = None, runner: Runner = run_subprocess
+    pdf: bytes,
+    *,
+    text_pdf: bytes | None = None,
+    runner: Runner = run_subprocess,
+    osd_skip_ink: float = DEFAULT_THRESHOLDS.blank_ink_review_max,
 ) -> list[PageInfo]:
     """全ページの測定値を返す。読めなければ書類起因の失敗。
 
     画像（インク・dHash・向き）は `pdf` から取る。ページごとのテキストは `text_pdf` が
     あればそちらから取り（スキャンの原本にはテキスト層が無いため、OCR 済みのアーカイブ版を
-    渡す）、無ければ `pdf` から取る。
+    渡す）、無ければ `pdf` から取る。インクの割合が `osd_skip_ink` 以下のページは
+    白紙の削除候補になりうるので、向きを調べない。
     """
     with tempfile.TemporaryDirectory() as tmp:
         cwd = Path(tmp)
@@ -186,7 +191,7 @@ def analyze_pdf(
                 ratio, h = ink_ratio(img), dhash(img)
             rotate, conf = None, 0.0
             # 白紙の削除候補になりうるページは、向きを読んでも使わないので tesseract を呼ばない
-            if ratio > DEFAULT_THRESHOLDS.blank_ink_review_max:
+            if ratio > osd_skip_ink:
                 rotate, conf = _detect_rotation(runner, cwd, n)
             result.append(PageInfo(n, ratio, texts[n - 1], h, rotate, conf))
         return result

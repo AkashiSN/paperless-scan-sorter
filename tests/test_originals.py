@@ -116,3 +116,11 @@ def test_削除に失敗しても警告して続ける(
     assert not (tmp_path / "2.pdf").exists()
     assert any("1.pdf" in r.getMessage() for r in caplog.records)
     assert any("PermissionError" in r.getMessage() for r in caplog.records)
+
+
+def test_hasは退避があるかを返す(tmp_path: Path) -> None:
+    s = OriginalsStore(tmp_path / "originals")
+    assert s.has(12) is False
+    s.save(12, b"x")
+    assert s.has(12) is True
+    assert s.has(13) is False

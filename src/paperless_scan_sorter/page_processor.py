@@ -31,6 +31,7 @@ VERSION_POLL_SECONDS = 5
 TOO_MANY_PAGES_REASON = "ページが多すぎる"
 VERSION_TIMEOUT_REASON = "新しい版の取り込みを確認できない"
 FAILED_REASON = "ページ整形に失敗"
+UNCONFIRMED_REASON = "前回の整形が未確認"
 
 
 @dataclass
@@ -83,7 +84,7 @@ def run_page_cycle(
             outcome = _fix(
                 doc, paperless, originals, analyze, count_pages, thresholds, sleep, monotonic
             )
-            _patch_tags(doc, paperless, ids, review=bool(outcome.review_reasons))
+            _patch_tags(doc.id, paperless, ids, review=bool(outcome.review_reasons))
         except ServiceUnavailable as e:
             logger.error("書類 %d のページ整形中に利用不可となり周期を打ち切る: %s", doc.id, e)
             result.aborted = True
@@ -94,7 +95,8 @@ def run_page_cycle(
             result.unchanged += 1
         if outcome.review_reasons:
             result.review += 1
-            logger.info("書類 %d: pages review (%s)", doc.id, ", ".join(outcome.review_reasons))
+            label = "pages fixed+review" if outcome.fixed else "pages review"
+            logger.info("書類 %d: %s (%s)", doc.id, label, ", ".join(outcome.review_reasons))
         elif outcome.fixed:
             logger.info("書類 %d: pages fixed", doc.id)
         else:
@@ -121,12 +123,19 @@ def _fix(
             return _Outcome(review_reasons=(TOO_MANY_PAGES_REASON,))
         # 画像は原本から、ページごとのテキストは OCR 済みのアーカイブ版から取る
         archive = paperless.download_archive(doc.id)
-        plan = plan_pages(analyze(pdf, text_pdf=archive), thresholds)
+        infos = analyze(pdf, text_pdf=archive, osd_skip_ink=thresholds.blank_ink_review_max)
+        plan = plan_pages(infos, thresholds)
         for a in plan.actions:
             logger.info("書類 %d p%d: %s %s (%s)", doc.id, a.page, a.action, a.reason, a.detail)
         plan_reasons = ("ページの判定が曖昧",) if plan.review else ()
         if plan.operations is None:
             return _Outcome(unchanged=True, review_reasons=plan_reasons)
+        # 退避があるのは前に直そうとした印。版を待つ間に打ち切られた書類は、取り込みが
+        # 終わる前の古い版から同じ操作を計算し直すことになり、送り直すと新しい版の
+        # 別のページを消しうるので、edit_pdf を呼ばずに人の確認へ回す（D-013）
+        if originals.has(doc.id):
+            logger.warning("書類 %d: 元の PDF の退避が既にあるため直さない", doc.id)
+            return _Outcome(review_reasons=(UNCONFIRMED_REASON,))
         originals.save(doc.id, pdf)
         before = paperless.document_versions(doc.id)
         paperless.edit_pdf(doc.id, plan.operations)
@@ -171,16 +180,17 @@ def _wait_new_version(
         sleep(VERSION_POLL_SECONDS)
 
 
-def _patch_tags(doc: Document, paperless: PaperlessClient, ids: TagIds, *, review: bool) -> None:
+def _patch_tags(doc_id: int, paperless: PaperlessClient, ids: TagIds, *, review: bool) -> None:
     """page-todo を外して ai-todo を足す。既存のタグは残す（置き換えずにマージする）。
 
+    周期の始めの一覧のタグは版を待つ間に古くなるので、PATCH の直前に読み直してマージする。
     400/404 は警告だけにする。書類は page-todo のまま残り、次の周期で判定し直す。
-    直した後なら直すところが無いので、二重には直らない。
     """
-    tags = (doc.tags - {ids.page_todo}) | {ids.ai_todo}
-    if review:
-        tags |= {ids.page_review}
     try:
-        paperless.patch_document(doc.id, {"tags": sorted(tags)})
+        current = paperless.document_tags(doc_id)
+        tags = (current - {ids.page_todo}) | {ids.ai_todo}
+        if review:
+            tags |= {ids.page_review}
+        paperless.patch_document(doc_id, {"tags": sorted(tags)})
     except DocumentFailure as e:
-        logger.warning("書類 %d: タグの付け替えに失敗: %s", doc.id, e)
+        logger.warning("書類 %d: タグの付け替えに失敗: %s", doc_id, e)
