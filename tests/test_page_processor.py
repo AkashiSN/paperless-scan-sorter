@@ -27,6 +27,7 @@ PAGE_TODO, PAGE_REVIEW = 6, 7
 EXISTING_TAG = 99
 DOC_ID = 100
 PDF = b"%PDF-fake"
+ARCHIVE = b"%PDF-archive"
 TEXT = "請求書の本文です。" * 5
 
 
@@ -60,6 +61,7 @@ class FakePaperless:
         self.version_status: dict[int, int] = {}
         self.version_status_after_edit: dict[int, int] = {}
         self.edit_status: dict[int, int] = {}
+        self.archive_status: dict[int, int] = {}
         self.patch_status: dict[int, int] = {}
         self.list_status: int | None = None
         self.tag_rows = [
@@ -88,8 +90,14 @@ class FakePaperless:
         if method == "GET" and path == "/api/tags/":
             return httpx.Response(200, json={"results": self.tag_rows, "next": None})
         if method == "GET" and path.endswith("/download/"):
-            self.events.append(("download", int(path.split("/")[3])))
-            return httpx.Response(200, content=PDF)
+            doc_id = int(path.split("/")[3])
+            if request.url.params.get("original") == "true":
+                self.events.append(("download", doc_id))
+                return httpx.Response(200, content=PDF)
+            self.events.append(("archive", doc_id))
+            if doc_id in self.archive_status:
+                return httpx.Response(self.archive_status[doc_id])
+            return httpx.Response(200, content=ARCHIVE)
         if method == "POST" and path == "/api/documents/edit_pdf/":
             body = json.loads(request.content)
             doc_id = body["documents"][0]
@@ -181,12 +189,12 @@ def _run(
     analyze: object = None,
     count: int = 3,
 ) -> PageCycleResult:
-    pages = analyze if analyze is not None else (lambda pdf: NORMAL)
+    pages = analyze if analyze is not None else (lambda pdf, text_pdf=None: NORMAL)
     return run_page_cycle(
         server.client(),
         originals,
         analyze=pages,  # type: ignore[arg-type]
-        count_pages=lambda pdf: count,
+        count_pages=lambda pdf, text_pdf=None: count,
         sleep=clock.sleep,
         monotonic=clock.monotonic,
         now=lambda: 1_000_000_000.0,
@@ -219,7 +227,7 @@ def test_白紙ページは退避してからedit_pdfで消し版が増えてか
 ) -> None:
     server = FakePaperless([_doc()], originals_dir)
     server.versions[DOC_ID] = [{1}, {1, 2}]
-    r = _run(server, originals, FakeClock(), analyze=lambda pdf: WITH_BLANK)
+    r = _run(server, originals, FakeClock(), analyze=lambda pdf, text_pdf=None: WITH_BLANK)
     assert r == PageCycleResult(fixed=1)
     assert server.saved_before_edit == [True]
     assert (originals_dir / f"{DOC_ID}.pdf").read_bytes() == PDF
@@ -228,6 +236,7 @@ def test_白紙ページは退避してからedit_pdfで消し版が増えてか
     ]
     assert server.events == [
         ("download", DOC_ID),
+        ("archive", DOC_ID),
         ("versions", DOC_ID),
         ("edit", DOC_ID),
         ("versions", DOC_ID),
@@ -240,7 +249,7 @@ def test_版が2回目のポーリングで増える(originals: OriginalsStore) 
     server = FakePaperless([_doc()])
     server.versions[DOC_ID] = [{1}, {1}, {1, 2}]
     clock = FakeClock()
-    r = _run(server, originals, clock, analyze=lambda pdf: WITH_BLANK)
+    r = _run(server, originals, clock, analyze=lambda pdf, text_pdf=None: WITH_BLANK)
     assert r == PageCycleResult(fixed=1)
     assert clock.sleeps == [5]
 
@@ -248,7 +257,7 @@ def test_版が2回目のポーリングで増える(originals: OriginalsStore) 
 def test_版が増えないまま600秒たてばpage_reviewにする(originals: OriginalsStore) -> None:
     server = FakePaperless([_doc()])
     clock = FakeClock()
-    r = _run(server, originals, clock, analyze=lambda pdf: WITH_BLANK)
+    r = _run(server, originals, clock, analyze=lambda pdf, text_pdf=None: WITH_BLANK)
     assert r == PageCycleResult(review=1)
     assert len(server.edits) == 1
     assert server.patches[DOC_ID] == {"tags": _merged(PAGE_REVIEW)}
@@ -260,7 +269,7 @@ def test_版が増えないまま600秒たてばpage_reviewにする(originals: 
 def test_版の取得が404ならpage_reviewにする(originals: OriginalsStore) -> None:
     server = FakePaperless([_doc()])
     server.version_status_after_edit[DOC_ID] = 404
-    r = _run(server, originals, FakeClock(), analyze=lambda pdf: WITH_BLANK)
+    r = _run(server, originals, FakeClock(), analyze=lambda pdf, text_pdf=None: WITH_BLANK)
     assert r == PageCycleResult(review=1)
     assert len(server.edits) == 1
     assert server.patches[DOC_ID] == {"tags": _merged(PAGE_REVIEW)}
@@ -268,7 +277,7 @@ def test_版の取得が404ならpage_reviewにする(originals: OriginalsStore)
 
 def test_境界の判定は直さずpage_reviewにする(originals: OriginalsStore) -> None:
     server = FakePaperless([_doc()])
-    r = _run(server, originals, FakeClock(), analyze=lambda pdf: BORDERLINE)
+    r = _run(server, originals, FakeClock(), analyze=lambda pdf, text_pdf=None: BORDERLINE)
     assert r == PageCycleResult(unchanged=1, review=1)
     assert server.edits == []
     assert server.patches[DOC_ID] == {"tags": _merged(PAGE_REVIEW)}
@@ -278,7 +287,7 @@ def test_edit_pdfが403ならpage_reviewにして次の書類へ進む(originals
     server = FakePaperless([_doc(), _doc(101)])
     server.edit_status[DOC_ID] = 403
     server.versions[101] = [{1}, {1, 2}]
-    r = _run(server, originals, FakeClock(), analyze=lambda pdf: WITH_BLANK)
+    r = _run(server, originals, FakeClock(), analyze=lambda pdf, text_pdf=None: WITH_BLANK)
     assert r == PageCycleResult(fixed=1, review=1)
     assert server.patches[DOC_ID] == {"tags": _merged(PAGE_REVIEW)}
     assert server.patches[101] == {"tags": _merged()}
@@ -291,7 +300,7 @@ def test_analyzeの想定外の例外はpage_reviewにして型名だけを残�
 ) -> None:
     server = FakePaperless([_doc()])
 
-    def broken(pdf: bytes) -> list[PageInfo]:
+    def broken(pdf: bytes, text_pdf: bytes | None = None) -> list[PageInfo]:
         raise RuntimeError("本文の断片 秘密")
 
     with caplog.at_level(logging.DEBUG):
@@ -307,7 +316,7 @@ def test_ページが多すぎればanalyzeを呼ばずpage_reviewにする(orig
     server = FakePaperless([_doc()])
     called: list[bytes] = []
 
-    def analyze(pdf: bytes) -> list[PageInfo]:
+    def analyze(pdf: bytes, text_pdf: bytes | None = None) -> list[PageInfo]:
         called.append(pdf)
         return NORMAL
 
@@ -321,7 +330,7 @@ def test_ページが50ならanalyzeを呼ぶ(originals: OriginalsStore) -> None
     server = FakePaperless([_doc()])
     called: list[bytes] = []
 
-    def analyze(pdf: bytes) -> list[PageInfo]:
+    def analyze(pdf: bytes, text_pdf: bytes | None = None) -> list[PageInfo]:
         called.append(pdf)
         return NORMAL
 
@@ -334,7 +343,7 @@ def test_退避でServiceUnavailableならedit_pdfを呼ばず打ち切る(tmp_p
     blocker.write_bytes(b"x")
     store = OriginalsStore(blocker / "originals")
     server = FakePaperless([_doc(), _doc(101)])
-    r = _run(server, store, FakeClock(), analyze=lambda pdf: WITH_BLANK)
+    r = _run(server, store, FakeClock(), analyze=lambda pdf, text_pdf=None: WITH_BLANK)
     assert r == PageCycleResult(aborted=True)
     assert server.edits == []
     assert ("edit", DOC_ID) not in server.events
@@ -399,7 +408,42 @@ def test_ログに判定理由を出しタイトルと本文を出さない(
         _page(3, dhash=0x0F0F0F0F0F0F0F0F),
     ]
     with caplog.at_level(logging.DEBUG):
-        _run(server, originals, FakeClock(), analyze=lambda pdf: secret_pages)
+        _run(server, originals, FakeClock(), analyze=lambda pdf, text_pdf=None: secret_pages)
     assert "極秘" not in caplog.text
     assert f"書類 {DOC_ID}: pages fixed" in caplog.text
     assert f"書類 {DOC_ID} p2: delete 白紙 (ink=0.0000 text=0)" in caplog.text
+
+
+def test_analyzeに原本とアーカイブ版の両方を渡し退避するのは原本(
+    originals: OriginalsStore, originals_dir: Path
+) -> None:
+    server = FakePaperless([_doc()], originals_dir)
+    seen: list[tuple[bytes, bytes | None]] = []
+
+    def analyze(pdf: bytes, text_pdf: bytes | None = None) -> list[PageInfo]:
+        seen.append((pdf, text_pdf))
+        return WITH_BLANK
+
+    _run(server, originals, FakeClock(), analyze=analyze)
+    assert seen == [(PDF, ARCHIVE)]
+    assert (originals_dir / f"{DOC_ID}.pdf").read_bytes() == PDF
+
+
+@pytest.mark.parametrize("status", [400, 404])
+def test_アーカイブ版の取得が書類起因ならpage_reviewにする(
+    originals: OriginalsStore, status: int
+) -> None:
+    server = FakePaperless([_doc()])
+    server.archive_status[DOC_ID] = status
+    r = _run(server, originals, FakeClock(), analyze=lambda pdf, text_pdf=None: WITH_BLANK)
+    assert r == PageCycleResult(review=1)
+    assert server.edits == []
+    assert server.patches[DOC_ID] == {"tags": _merged(PAGE_REVIEW)}
+
+
+def test_アーカイブ版の取得が503なら打ち切る(originals: OriginalsStore) -> None:
+    server = FakePaperless([_doc()])
+    server.archive_status[DOC_ID] = 503
+    r = _run(server, originals, FakeClock(), analyze=lambda pdf, text_pdf=None: WITH_BLANK)
+    assert r.aborted
+    assert server.edits == []

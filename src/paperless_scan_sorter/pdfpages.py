@@ -114,8 +114,41 @@ def _number(path: Path) -> int:
     return int(path.stem.rsplit("-", 1)[1])
 
 
-def analyze_pdf(pdf: bytes, *, runner: Runner = run_subprocess) -> list[PageInfo]:
-    """全ページの測定値を返す。読めなければ書類起因の失敗。"""
+def _text_per_page(
+    runner: Runner, cwd: Path, name: str, pages: int, *, strict: bool
+) -> list[str] | None:
+    """`pdftotext` でページごとのテキストを取る。
+
+    strict でなければ、テキスト用の PDF の不備（読めない・ページ数の不一致）は警告にして
+    None を返す。本文はログに出さない。
+    """
+    if not strict:
+        info = _run(runner, ["pdfinfo", name], cwd)
+        if info.returncode != 0:
+            logger.warning("テキスト用の PDF を pdfinfo が読めなかった。テキストを空にする")
+            return None
+        if _pages_in(info.stdout.decode("utf-8", "replace")) != pages:
+            logger.warning("テキスト用の PDF のページ数が合わない。テキストを空にする")
+            return None
+    proc = _run(runner, ["pdftotext", "-enc", "UTF-8", name, "-"], cwd)
+    if proc.returncode != 0:
+        if strict:
+            raise DocumentFailure("pdftotext が PDF を読めなかった")
+        logger.warning("テキスト用の PDF を pdftotext が読めなかった。テキストを空にする")
+        return None
+    texts = proc.stdout.decode("utf-8", "replace").split("\f")[:pages]
+    return texts + [""] * (pages - len(texts))
+
+
+def analyze_pdf(
+    pdf: bytes, *, text_pdf: bytes | None = None, runner: Runner = run_subprocess
+) -> list[PageInfo]:
+    """全ページの測定値を返す。読めなければ書類起因の失敗。
+
+    画像（インク・dHash・向き）は `pdf` から取る。ページごとのテキストは `text_pdf` が
+    あればそちらから取り（スキャンの原本にはテキスト層が無いため、OCR 済みのアーカイブ版を
+    渡す）、無ければ `pdf` から取る。
+    """
     with tempfile.TemporaryDirectory() as tmp:
         cwd = Path(tmp)
         (cwd / "doc.pdf").write_bytes(pdf)
@@ -131,11 +164,13 @@ def analyze_pdf(pdf: bytes, *, runner: Runner = run_subprocess) -> list[PageInfo
         if len(pngs) != pages:
             raise DocumentFailure("画像の枚数がページ数と合わない")
 
-        proc = _run(runner, ["pdftotext", "-enc", "UTF-8", "doc.pdf", "-"], cwd)
-        if proc.returncode != 0:
-            raise DocumentFailure("pdftotext が PDF を読めなかった")
-        texts = proc.stdout.decode("utf-8", "replace").split("\f")[:pages]
-        texts += [""] * (pages - len(texts))
+        if text_pdf is None:
+            texts = _text_per_page(runner, cwd, "doc.pdf", pages, strict=True)
+        else:
+            (cwd / "text.pdf").write_bytes(text_pdf)
+            texts = _text_per_page(runner, cwd, "text.pdf", pages, strict=False)
+        if texts is None:
+            texts = [""] * pages
 
         result: list[PageInfo] = []
         for n, png in enumerate(pngs, start=1):

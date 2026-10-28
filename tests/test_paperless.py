@@ -152,6 +152,18 @@ def test_原本をダウンロードする() -> None:
     assert seen[0].url.params["original"] == "true"
 
 
+def test_download_archiveはoriginalを付けずにダウンロードする() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, content=b"%PDF-archive")
+
+    assert make_client(handler).download_archive(4) == b"%PDF-archive"
+    assert seen[0].url.path == "/api/documents/4/download/"
+    assert "original" not in seen[0].url.params
+
+
 @pytest.mark.parametrize("status", [400, 404])
 def test_書類単位の400と404は書類起因の失敗(status: int) -> None:
     client = make_client(lambda r: httpx.Response(status))
@@ -159,6 +171,8 @@ def test_書類単位の400と404は書類起因の失敗(status: int) -> None:
         client.patch_document(1, {"title": "x"})
     with pytest.raises(DocumentFailure):
         client.download_original(1)
+    with pytest.raises(DocumentFailure):
+        client.download_archive(1)
 
 
 @pytest.mark.parametrize("status", [400, 404])

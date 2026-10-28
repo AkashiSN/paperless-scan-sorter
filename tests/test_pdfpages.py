@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import shutil
 import subprocess
 from pathlib import Path
@@ -10,6 +11,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from paperless_scan_sorter.errors import DocumentFailure, ServiceUnavailable
 from paperless_scan_sorter.pdfpages import (
+    Runner,
     analyze_pdf,
     dhash,
     hamming,
@@ -99,6 +101,78 @@ def test_argv_はリストでシェルを使わない() -> None:
     assert seen[0][0] == "pdfinfo"
 
 
+def _fake_runner(
+    pages_by_file: dict[str, int], texts: dict[str, bytes], calls: list[list[str]]
+) -> Runner:
+    """ファイルごとに pdfinfo のページ数と pdftotext の出力を返す偽の runner。"""
+
+    def runner(argv, cwd):  # noqa: ANN001, ANN202
+        calls.append(list(argv))
+        name = argv[1] if argv[0] in ("pdfinfo",) else argv[-2]
+        if argv[0] == "pdfinfo":
+            return _ok(f"Pages:          {pages_by_file[name]}\n".encode())
+        if argv[0] == "pdftoppm":
+            stem = argv[-1]
+            for i in range(1, pages_by_file[name] + 1):
+                Image.new("L", (50, 50), 255).save(Path(cwd) / f"{stem}-{i}.png")
+            return _ok()
+        if argv[0] == "pdftotext":
+            return _ok(texts[name])
+        return _ok()
+
+    return runner
+
+
+def test_text_pdfがあればテキストはそちらからpdftotextで取る() -> None:
+    calls: list[list[str]] = []
+    runner = _fake_runner(
+        {"doc.pdf": 2, "text.pdf": 2}, {"doc.pdf": b"\f\f", "text.pdf": b"one\ftwo\f"}, calls
+    )
+    infos = analyze_pdf(b"img", text_pdf=b"txt", runner=runner)
+    assert [i.text for i in infos] == ["one", "two"]
+    totext = [c for c in calls if c[0] == "pdftotext"]
+    assert [c[-2] for c in totext] == ["text.pdf"]
+
+
+def test_text_pdfのページ数が違えばテキストは全部空にして警告する(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    calls: list[list[str]] = []
+    runner = _fake_runner(
+        {"doc.pdf": 2, "text.pdf": 3},
+        {"doc.pdf": b"a\fb\f", "text.pdf": b"one\ftwo\fthree\f"},
+        calls,
+    )
+    with caplog.at_level(logging.WARNING):
+        infos = analyze_pdf(b"img", text_pdf=b"txt", runner=runner)
+    assert [i.text for i in infos] == ["", ""]
+    assert "ページ数が合わない" in caplog.text
+    assert "one" not in caplog.text
+
+
+def test_text_pdfが読めなければテキストは全部空にして続ける(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    calls: list[list[str]] = []
+    base = _fake_runner({"doc.pdf": 2, "text.pdf": 2}, {"doc.pdf": b"a\fb\f"}, calls)
+
+    def runner(argv, cwd):  # noqa: ANN001, ANN202
+        if argv[0] == "pdftotext" and argv[-2] == "text.pdf":
+            return _ok(returncode=1)
+        return base(argv, cwd)
+
+    with caplog.at_level(logging.WARNING):
+        infos = analyze_pdf(b"img", text_pdf=b"txt", runner=runner)
+    assert [i.text for i in infos] == ["", ""]
+    assert "テキスト用の PDF" in caplog.text
+
+
+def test_text_pdfが無ければ画像用のPDFからテキストを取る() -> None:
+    calls: list[list[str]] = []
+    runner = _fake_runner({"doc.pdf": 2}, {"doc.pdf": b"a\fb\f"}, calls)
+    assert [i.text for i in analyze_pdf(b"img", runner=runner)] == ["a", "b"]
+
+
 # --- 実物のコマンドを使うテスト ---
 
 _TOOLS = ("pdfinfo", "pdftoppm", "pdftotext", "tesseract")
@@ -181,3 +255,15 @@ def test_実物_テキストがページごとに分かれる() -> None:
     assert "first" in infos[0].text
     assert "second" in infos[1].text
     assert "second" not in infos[0].text
+
+
+@needs_tools
+def test_実物_テキストはtext_pdfから取り画像は元のPDFから取る() -> None:
+    scan = _pdf(_text_page(), Image.new("L", (827, 1169), 255))
+    layered = _text_pdf("first page", "second page")
+    infos = analyze_pdf(scan, text_pdf=layered)
+    assert "first" in infos[0].text
+    assert "second" in infos[1].text
+    assert infos[0].ink_ratio > 0.003
+    assert infos[1].ink_ratio <= 0.003
+    assert [i.text for i in analyze_pdf(scan)] == ["", ""]

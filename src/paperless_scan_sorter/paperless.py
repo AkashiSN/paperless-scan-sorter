@@ -113,6 +113,15 @@ class PaperlessClient:
         response = self._request("GET", path, document_scoped=True, params={"original": "true"})
         return response.content
 
+    def download_archive(self, doc_id: int) -> bytes:
+        """アーカイブ版（OCR のテキスト層付き）をダウンロードする。
+
+        `original` を付けないので、アーカイブ版が無い書類では原本が返る。
+        """
+        path = f"/api/documents/{doc_id}/download/"
+        response = self._request("GET", path, document_scoped=True)
+        return response.content
+
     def edit_pdf(self, doc_id: int, operations: Sequence[Mapping[str, int]]) -> None:
         """残すページを並べた順に、同じ書類 ID の新しい版として取り込み直させる。
 

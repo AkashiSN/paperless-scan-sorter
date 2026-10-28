@@ -56,7 +56,7 @@ def run_page_cycle(
     paperless: PaperlessClient,
     originals: OriginalsStore,
     *,
-    analyze: Callable[[bytes], list[PageInfo]] = analyze_pdf,
+    analyze: Callable[..., list[PageInfo]] = analyze_pdf,
     count_pages: Callable[[bytes], int] = page_count,
     thresholds: Thresholds = DEFAULT_THRESHOLDS,
     sleep: Callable[[float], None] = time.sleep,
@@ -106,7 +106,7 @@ def _fix(
     doc: Document,
     paperless: PaperlessClient,
     originals: OriginalsStore,
-    analyze: Callable[[bytes], list[PageInfo]],
+    analyze: Callable[..., list[PageInfo]],
     count_pages: Callable[[bytes], int],
     thresholds: Thresholds,
     sleep: Callable[[float], None],
@@ -119,7 +119,9 @@ def _fix(
         if pages > MAX_PAGES:
             logger.info("書類 %d: %d ページあるため判定しない", doc.id, pages)
             return _Outcome(review_reasons=(TOO_MANY_PAGES_REASON,))
-        plan = plan_pages(analyze(pdf), thresholds)
+        # 画像は原本から、ページごとのテキストは OCR 済みのアーカイブ版から取る
+        archive = paperless.download_archive(doc.id)
+        plan = plan_pages(analyze(pdf, text_pdf=archive), thresholds)
         for a in plan.actions:
             logger.info("書類 %d p%d: %s %s (%s)", doc.id, a.page, a.action, a.reason, a.detail)
         plan_reasons = ("ページの判定が曖昧",) if plan.review else ()
