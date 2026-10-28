@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from urllib.parse import urlsplit
@@ -113,6 +113,31 @@ class PaperlessClient:
         response = self._request("GET", path, document_scoped=True, params={"original": "true"})
         return response.content
 
+    def edit_pdf(self, doc_id: int, operations: Sequence[Mapping[str, int]]) -> None:
+        """残すページを並べた順に、同じ書類 ID の新しい版として取り込み直させる。
+
+        403 は書類の所有者が無いか ai-classifier のユーザーでないときに返り、
+        書類ごとに起きるので、書類起因として扱う。
+        """
+        self._request(
+            "POST",
+            "/api/documents/edit_pdf/",
+            document_statuses=(400, 403, 404),
+            forbidden_hint="書類の所有者が無いか ai-classifier のユーザーであること",
+            json={
+                "documents": [doc_id],
+                "operations": [dict(op) for op in operations],
+                "update_document": True,
+            },
+        )
+
+    def document_versions(self, doc_id: int) -> frozenset[int]:
+        """書類の版の ID を返す。edit_pdf の完了は新しい ID が増えたことで判定する。"""
+        path = f"/api/documents/{doc_id}/"
+        response = self._request("GET", path, document_scoped=True, params={"fields": "versions"})
+        with _parsing("GET", path):
+            return frozenset(v["id"] for v in response.json()["versions"])
+
     def _named(self, path: str) -> list[Named]:
         rows = self._list_all(path, {"page_size": _PAGE_SIZE})
         with _parsing("GET", path):
@@ -149,6 +174,8 @@ class PaperlessClient:
         path: str,
         *,
         document_scoped: bool = False,
+        document_statuses: tuple[int, ...] | None = None,
+        forbidden_hint: str | None = None,
         **kwargs: object,
     ) -> httpx.Response:
         # 例外メッセージにはメソッド・パス・ステータスだけを入れる。
@@ -164,6 +191,11 @@ class PaperlessClient:
         if status < 400:
             return response
         message = f"{method} {label_path}: HTTP {status}"
-        if document_scoped and status in (400, 404):
+        # 書類起因として扱うステータス。既定は 400/404 で、403 は呼び出しごとに足す。
+        if document_statuses is None and document_scoped:
+            document_statuses = (400, 404)
+        if document_statuses and status in document_statuses:
+            if status == 403 and forbidden_hint:
+                message = f"{message} ({forbidden_hint})"
             raise DocumentFailure(message)
         raise ServiceUnavailable(message)

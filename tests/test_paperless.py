@@ -239,3 +239,76 @@ def test_書類一覧の応答の形が違えば周期を止める() -> None:
 
     with pytest.raises(ServiceUnavailable):
         make_client(handler).documents_with_tag(2)
+
+
+def test_edit_pdfは操作を並べて版として取り込み直させる() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"result": "OK"})
+
+    operations = [{"page": 1}, {"page": 3, "rotate": 90}]
+    make_client(handler).edit_pdf(7, operations)
+    assert seen[0].method == "POST"
+    assert seen[0].url.path == "/api/documents/edit_pdf/"
+    assert json.loads(seen[0].content) == {
+        "documents": [7],
+        "operations": operations,
+        "update_document": True,
+    }
+
+
+@pytest.mark.parametrize("status", [400, 403, 404])
+def test_edit_pdfの400と403と404は書類起因の失敗になる(status: int) -> None:
+    client = make_client(lambda request: httpx.Response(status, text="secret body"))
+    with pytest.raises(DocumentFailure) as e:
+        client.edit_pdf(7, [{"page": 1}])
+    assert str(status) in str(e.value)
+    assert "secret body" not in str(e.value)
+
+
+def test_edit_pdfの403には所有者の条件を添える() -> None:
+    client = make_client(lambda request: httpx.Response(403))
+    with pytest.raises(DocumentFailure, match="所有者"):
+        client.edit_pdf(7, [{"page": 1}])
+
+
+def test_edit_pdfの500は打ち切り対象になる() -> None:
+    client = make_client(lambda request: httpx.Response(500))
+    with pytest.raises(ServiceUnavailable):
+        client.edit_pdf(7, [{"page": 1}])
+
+
+def test_既存の呼び出しの403は引き続き打ち切り対象になる() -> None:
+    client = make_client(lambda request: httpx.Response(403))
+    with pytest.raises(ServiceUnavailable):
+        client.patch_document(7, {"title": "x"})
+
+
+def test_書類の版の一覧を返す() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={"versions": [{"id": 1, "is_root": True}, {"id": 4, "is_root": False}]},
+        )
+
+    assert make_client(handler).document_versions(7) == frozenset({1, 4})
+    assert seen[0].url.path == "/api/documents/7/"
+    assert seen[0].url.params["fields"] == "versions"
+
+
+@pytest.mark.parametrize("status", [400, 404])
+def test_版の一覧の400と404は書類起因の失敗になる(status: int) -> None:
+    client = make_client(lambda request: httpx.Response(status))
+    with pytest.raises(DocumentFailure):
+        client.document_versions(7)
+
+
+def test_versionsが無い応答は打ち切り対象になる() -> None:
+    client = make_client(lambda request: httpx.Response(200, json={"id": 7}))
+    with pytest.raises(ServiceUnavailable):
+        client.document_versions(7)
