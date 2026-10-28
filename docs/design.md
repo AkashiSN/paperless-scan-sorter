@@ -92,7 +92,7 @@ flowchart LR
 7. 人が保存ビュー「確認待ち」（10 章）の書類を Web UI で確認・修正し、`ai-review`・`page-review`・`ai-failed` と `inbox` を外す
 8. Cloud Sync が整理済みのファイルを Google Drive に同期する
 
-ページ整形（6 章）を入れる場合、手順 2 で付けるタグは `ai-todo` ではなく `page-todo` にする。ページ整形と OCR のやり直しが終わった時点で `ai-todo` に付け替え、手順 3 以降に進む。
+ページ整形（6 章）を入れる場合、手順 2 で付けるタグは `ai-todo` ではなく `page-todo` にする。ai-classifier は各周期で分類の前にページ整形を回し、ページ整形と OCR のやり直しが終わった書類を `ai-todo` に付け替える。直せなかった書類も `page-review` を付けて `ai-todo` に進め、手順 3 以降の分類は同じ周期のうちに行う（6.3）。
 
 | タグ | 付けるもの | 意味 |
 | --- | --- | --- |
@@ -128,40 +128,60 @@ Paperless の書類詳細画面で、回転・ページ削除・並べ替え・�
 
 ### 6.3 自動ページ整形（ai-classifier の前段）
 
-判定はローカルの画像処理だけで行い、Claude は使わない。PDF の書き換えは自前で行わず、Paperless の API に任せる。
+判定はローカルの画像処理だけで行い、Claude は使わない。PDF の書き換えは自前で行わず、Paperless の API に任せる。ai-classifier は 1 周期ごとに、ページ整形を分類の直前に回す。直した書類はその回の分類で処理される。
 
-**使う API:** `bulk_edit` の `rotate` は書類全体を回転させる操作で、ページ単位では回せない。また `bulk_edit` は 1 回の呼び出しで 1 メソッドしか実行できない。ページ単位の回転と削除をまとめて行うには、新しめのバージョンにあるページ編集用のメソッド（`edit_pdf`）を使う。導入するバージョンで有無とパラメータを確認し、無ければ次の縮退運用にする。
+**使う API:** `POST /api/documents/edit_pdf/` に `update_document: true` を付けて呼ぶ（[D-012](decisions.md)）。`operations` には残すページを `{"page": n, "rotate": 角度}` の形で並べる。`operations` に無いページは捨てられ、`rotate`（時計回り、90 の倍数）は付けたページだけが回る。Paperless は直した PDF を同じ書類 ID の新しい版として取り込み直し、OCR をやり直す。ページ単位の回転と削除を 1 回の呼び出しで行うので、`bulk_edit` の `rotate`・`delete_pages` は使わない。
 
-- 全ページが同じ向きにずれている → `rotate` で書類全体を回転
-- 一部のページだけ向きがずれている → 自動では直さず `page-review`
-- 削除は `delete_pages` で行う。回転と削除の両方が必要な書類は、回転（ページ番号が変わらない）を先、削除を後に別々に呼ぶ
+新しい版ができても書類 ID は変わらず、本文・ページ数・ダウンロードは新しい版のものになる。タグなどのメタデータは引き継がれる。取り込み時のワークフローは新しい版でも動くが、元の書類に `page-todo` は付かないので、同じ書類を繰り返し直すことはない（Paperless-ngx 3.3.4 で確認）。
 
 | 問題 | 検出方法 | 自動処理 |
 | --- | --- | --- |
-| 白紙ページ | ページを画像化し、インクの比率がしきい値以下で、かつそのページの OCR テキストがほぼ空 | ページを削除 |
-| 重複ページ | 連続するページの知覚ハッシュ（`imagehash`）の距離がしきい値以下で、かつページごとのテキストがほぼ一致 | 後ろ側のページを削除 |
-| 逆さま・横向き | Tesseract の向き検出（`--psm 0`）で、信頼度がしきい値以上 | ページを回転（上記の縮退運用を参照） |
+| 白紙ページ | ページを画像化し、インクの比率がしきい値以下で、かつそのページのテキストがほぼ空 | ページを削除 |
+| 重複ページ | 直前に残したページとの知覚ハッシュ（dHash）の距離がしきい値以下で、かつページごとのテキストがほぼ一致 | 後ろ側のページを削除 |
+| 逆さま・横向き | Tesseract の向き検出（`--psm 0`）で、信頼度がしきい値以上 | ページを回転 |
 | 判断に迷う | 上記のしきい値の境界にある | 自動では直さず `page-review` を付ける。判定値をログに残す |
 
-ページごとのテキストは Paperless の本文（書類全体で 1 つ）からは分けられないため、ダウンロードした PDF から `pdftotext` でページ単位に取り出す。
+ページごとのテキストは Paperless の本文（書類全体で 1 つ）からは分けられないため、ダウンロードした PDF から `pdftotext` でページ単位に取り出す。ページの画像は `pdftoppm` で 100dpi のグレースケールにする。インクの比率は、外周 5% を除いた領域で輝度 160 未満の画素の割合とする。向きの検出は 150dpi で画像にし直して行う。白紙の確認待ちになりうるページ（インクの比率が `blank_ink_review_max` 以下）は、向きを読んでも使わないので向きの検出を省く。
+
+**しきい値:** 判定のしきい値はコードの 1 か所（`pageplan.Thresholds`）にまとめ、環境変数にはしない（[D-016](decisions.md)）。既定値は次のとおりで、実際のスキャンで調整する。
+
+| 名前 | 既定値 | 意味 |
+| --- | --- | --- |
+| `blank_ink_max` | 0.003 | インクの比率がこれ以下で、かつ文字数が `blank_text_max` 以下なら白紙として削除する |
+| `blank_text_max` | 5 | 白紙とみなす文字数（空白を除く）の上限 |
+| `blank_ink_review_max` | 0.01 | インクの比率がこれ以下で、かつ文字数が `blank_text_review_max` 以下なら白紙の疑いとして `page-review` |
+| `blank_text_review_max` | 30 | 白紙の疑いとみなす文字数の上限 |
+| `dup_hash_max` | 4 | dHash のハミング距離がこれ以下で、テキストの条件も満たせば重複として削除する |
+| `dup_text_ratio_min` | 0.95 | 重複として削除するテキストの一致率（空白を除いた文字列の `SequenceMatcher` の ratio）の下限 |
+| `dup_text_min_chars` | 20 | 重複として削除するのは、両ページともこの文字数以上あるときだけ |
+| `dup_hash_review_max` | 10 | ハミング距離がこれ以下で削除の条件を満たさなければ、重複の疑いとして `page-review` |
+| `rotate_confidence_min` | 5.0 | 向き検出の信頼度がこれ以上なら回転する |
+| `rotate_confidence_review_min` | 1.0 | 信頼度がこれ以上で `rotate_confidence_min` 未満なら、向きの疑いとして `page-review` |
+| `max_deletions` | 2 | 1 書類で削除するページの上限 |
 
 **処理の流れ:**
 
 1. 取り込み時のワークフローで `inbox` と `page-todo` を付ける
-2. ai-classifier が `page-todo` の書類を取得し、PDF をダウンロードしてページごとに判定する
-3. 直す必要があれば、元の PDF を `/state/originals/{書類ID}.pdf` に退避してから API で直す
-4. API が返したタスク ID で Paperless の再処理（OCR のやり直し）の完了を待つ。完了前に分類すると古い本文を読んでしまうため
-5. `page-todo` を外して `ai-todo` を付ける。迷ったページがあれば `page-review` も付ける。7 章の分類・リネームに進む
+2. ai-classifier が `page-todo` の書類を取得し、PDF をダウンロードしてページごとに判定する。ダウンロードは最新の版を返す（3.3.4 で確認）。50 ページを超える書類は判定せず `page-review` を付ける
+3. 直す必要があれば、元の PDF を `/state/originals/{書類ID}.pdf` に退避してから、`versions` の版の ID を控えて `edit_pdf` を呼ぶ
+4. `versions` に新しい版が増えるまで待つ（5 秒ごとに確かめ、最大 600 秒。来なければ `page-review`）。完了前に分類すると古い本文を読んでしまうため。`edit_pdf` の応答にはタスク ID が無く、ai-classifier のユーザーはタスク API も読めないので、版の増加で完了を判定する（[D-013](decisions.md)）
+5. `page-todo` を外して `ai-todo` を付ける。迷ったページがあれば `page-review` も付ける。タグは既存のタグにマージして送る。7 章の分類・リネームに進む
+
+**失敗したとき（[D-014](decisions.md)）:** ページ整形の失敗は失敗回数に数えず、`ai-failed` も使わない。整形できなくても分類は進めたいためである。
+
+- PDF が読めない、`edit_pdf` が 400・403・404 を返す、想定外の例外が出る → 直さずに `page-review` を付けて `ai-todo` へ進める。`edit_pdf` の 403 は書類の所有者の問題で書類ごとに起きるので、書類に起因する失敗として扱う
+- Paperless に繋がらない、401、5xx、元の PDF を退避できない → その周期を打ち切る。書類は `page-todo` に残り、次の周期で判定し直す
+- ページ整形の周期が打ち切られても、同じ周期の分類は回す
 
 **安全策:**
 
-- 1 書類で削除するページは最大 2 ページまで。それを超える判定は `page-review` に回す
-- 1 ページしかない書類は削除しない
+- 1 書類で削除するページは最大 2 ページまで。それを超える判定は削除せず、削除候補をすべて `page-review` に回す
+- 1 ページしかない書類は削除しない。全ページを消す操作は作らない
 - 感熱紙のレシートや裏写りは白紙と誤判定しやすいため、しきい値は実際のスキャンで調整する
-- 処理内容（書類 ID、ページ番号、操作、判定理由・判定値）をログに残す
-- 退避した元の PDF は 90 日で削除する。誤削除に気づいたら 6.2 の手順で取り込み直す
+- 処理内容（書類 ID、ページ番号、操作、判定理由・判定値）をログに残す。本文やタイトルはログに出さない
+- 退避した元の PDF は 90 日で削除する（周期の始めに消す）。同じ書類の退避ファイルが既にあれば上書きせず、最初の原本を残す。誤削除に気づいたら 6.2 の手順で取り込み直す
 
-**依存ライブラリ:** `pdf2image`・`pdftotext`（poppler）、`Pillow`、`imagehash`、`tesseract-ocr`（`jpn`、`osd`）
+**依存（[D-015](decisions.md)）:** poppler（`pdfinfo`・`pdftoppm`・`pdftotext`）、`Pillow`（インクの比率と dHash を自前で計算する）、`tesseract-ocr` と向き検出用の言語データ `osd`。外部コマンドは引数配列で起動し、作業は毎回新しい一時ディレクトリで行う。
 
 ## 7. AI 分類器（Claude Code）詳細設計
 
@@ -275,10 +295,10 @@ Paperless-ngx 一式と ai-classifier を、TrueNAS の 1 つのカスタムア�
 | `paperless` | `ghcr.io/paperless-ngx/paperless-ngx` | `PAPERLESS_OCR_LANGUAGE=jpn+eng`、`PAPERLESS_OCR_LANGUAGES=jpn`、`PAPERLESS_OCR_MODE=skip`、`PAPERLESS_TIME_ZONE`（利用者のタイムゾーン）、`PAPERLESS_FILENAME_FORMAT`（8 章）、`PAPERLESS_CONSUMER_RECURSIVE=true`（除外用サブフォルダのため）、`PAPERLESS_CONSUMER_POLLING=60`（SMB 経由の書き込みは inotify で拾えない場合があるため）、`USERMAP_UID`/`USERMAP_GID` |
 | `db` | `postgres` | Paperless 専用 |
 | `broker` | `redis` | Paperless のタスクキュー |
-| `ai-classifier` | このリポジトリ（Python ＋ Claude Code CLI） | `PAPERLESS_URL`、`PAPERLESS_TOKEN`（専用ユーザーの API トークン。`PAPERLESS_TOKEN_FILE` でファイルから読むこともできる）、`CLAUDE_CODE_OAUTH_TOKEN`、`INTERVAL=300`、`STATE_DIR=/state`、`CLAUDE_MODEL=sonnet`、`CLAUDE_TIMEOUT=300`（秒）、`TZ`（Paperless と同じタイムゾーン。`created` の未来日判定の「今日」に使う） |
+| `ai-classifier` | このリポジトリ（Python ＋ Claude Code CLI。ページ整形用に poppler と tesseract を含む） | `PAPERLESS_URL`、`PAPERLESS_TOKEN`（専用ユーザーの API トークン。`PAPERLESS_TOKEN_FILE` でファイルから読むこともできる）、`CLAUDE_CODE_OAUTH_TOKEN`、`INTERVAL=300`、`STATE_DIR=/state`、`CLAUDE_MODEL=sonnet`、`CLAUDE_TIMEOUT=300`（秒）、`TZ`（Paperless と同じタイムゾーン。`created` の未来日判定の「今日」に使う） |
 
 - ai-classifier には Paperless 用の専用ユーザーを作る。権限は、書類とタグの閲覧・変更、発行元と文書タイプの閲覧・変更・追加（新規作成のため）だけにする
-- `bulk_edit` のページ操作（回転・ページ削除）は、書類の所有者であることを求められる場合がある。取り込み時のワークフローで所有者を ai-classifier のユーザーにするか、権限の要件を導入するバージョンで確認する
+- ページ整形の `edit_pdf` は、書類の変更権限に加えて、書類の所有者が無いか ai-classifier のユーザー自身であることを求める（Paperless-ngx 3.3.4 で確認）。満たさない書類は 403 になり、`page-review` を付けて分類へ進む（6.3）。取り込み時のワークフローでは所有者を設定しないか、ai-classifier のユーザーにする
 - トークン類は TrueNAS のアプリ設定の環境変数（またはシークレットファイル）で渡し、イメージに焼き込まない
 - Paperless の Web UI は LAN と VPN（Tailscale など）からのみ到達できるようにし、インターネットには公開しない
 
@@ -333,7 +353,8 @@ Drive への同期は閲覧用で、SYNC モードなので Paperless 側の削�
 - [ ] 初期の文書タイプとタグの一覧（例: 請求書、契約書、保証書、税・役所、保険、銀行）
 - [ ] Claude に送らない書類の範囲（除外方法は 10 章の `private/` フォルダ）
 - [ ] 分類は Sonnet か Haiku か（精度と利用枠のバランスを実運用で見る）
-- [ ] 導入する Paperless のバージョンで、ページ単位の編集メソッド（`edit_pdf`）の有無、ページ操作の権限要件、発行元未設定時のテンプレート上の値を確認する
+- [x] ページ単位の編集メソッド（`edit_pdf`）の有無とページ操作の権限要件 → Paperless-ngx 3.3.4 で確認した。`edit_pdf` は同じ書類 ID の新しい版を作る（6.3、[D-012](decisions.md)）。所有者が無いか ai-classifier のユーザーであることを求める（9 章）
+- [ ] 導入する Paperless のバージョンで、発行元未設定時のテンプレート上の値を確認する
 - [ ] 縦書きの書類が多い場合、OCR 言語に `jpn_vert` を加えるか（処理時間と精度を実際の書類で比べる）
 - [ ] `document_exporter` の出力をオフサイト（Drive の別フォルダや外付けディスク）にも置くか
 
