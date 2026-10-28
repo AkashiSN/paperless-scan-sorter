@@ -198,7 +198,7 @@ claude -p --model sonnet --max-turns 3 --output-format json --no-session-persist
 | キー | 型 | 内容 |
 | --- | --- | --- |
 | `title` | string | 内容が分かる短い日本語タイトル。発行元は含めない |
-| `correspondent` | string | 発行元。既存から選ぶ。無ければ新しい名前 |
+| `correspondent` | string \| null | 発行元。既存から選ぶ。無ければ新しい名前。書類から分からなければ null（確認待ちに回し、発行元は空のまま。ファイルは `未分類/` に置かれる。D-011） |
 | `document_type` | string | 文書タイプ。既存から選ぶ。無ければ新しい名前 |
 | `tags` | string\[\] | 既存タグから最大 3 つ |
 | `created` | string \| null | 書類上の日付（YYYY-MM-DD）。不明なら null |

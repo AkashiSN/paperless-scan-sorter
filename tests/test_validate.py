@@ -44,7 +44,7 @@ def test_JSONを読めなければ書類起因の失敗(text: str) -> None:
         {"tags": "銀行"},
         {"tags": [1]},
         {"title": 1},
-        {"correspondent": None},
+        {"correspondent": 1},
         {"document_type": 3},
         {"created": 20261020},
     ],
@@ -105,6 +105,12 @@ def test_correspondentは制御文字と前後の空白だけ除く() -> None:
     assert c.correspondent == "Foo Inc."
     c = parse_classification(_j(correspondent=" \x00 "), known_tags=KNOWN, today=TODAY)
     assert c.correspondent is None
+
+
+def test_発行元が分からないnullは失敗にせずNone() -> None:
+    c = parse_classification(_j(correspondent=None), known_tags=KNOWN, today=TODAY)
+    assert c.correspondent is None
+    assert c.title == "取引報告書 2026年9月"
 
 
 def test_document_typeは制御文字と前後の空白だけ除く() -> None:

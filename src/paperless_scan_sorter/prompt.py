@@ -16,10 +16,10 @@ _TEMPLATE = """\
 
 次の JSON だけを出力してください。説明文やコードブロックは付けないでください。
 
-{"title": string, "correspondent": string, "document_type": string, "tags": string[], "created": string | null, "confident": boolean}
+{"title": string, "correspondent": string | null, "document_type": string, "tags": string[], "created": string | null, "confident": boolean}
 
 - title: 内容が分かる短い日本語のタイトル。発行元の名前は含めない
-- correspondent: 書類の発行元。下の候補に当てはまるものがあれば、表記を変えずにそのまま使う。無ければ正式な名前を新しく書く
+- correspondent: 書類の発行元。下の候補に当てはまるものがあれば、表記を変えずにそのまま使う。無ければ正式な名前を新しく書く。書類から発行元が分からなければ null にし、「不明」のような名前を書かない
 - document_type: 文書の種類。下の候補から選ぶ。無ければ新しい名前を書く
 - tags: 下の候補から当てはまるものを最大 3 つ。無ければ空の配列
 - created: 書類に書かれた日付（発行日など）を YYYY-MM-DD で。分からなければ null

@@ -48,3 +48,9 @@ def test_候補の名前に含まれる差し込み記号は埋めない() -> No
     assert "発行元の候補:\n- {document_types}\n- {tags}\n" in p
     assert p.count("\n- 銀行\n") == 1
     assert "文書の種類の候補:\n（なし）" in p
+
+
+def test_発行元が分からなければnullにするよう指示する() -> None:
+    p = build_prompt(correspondents=[], document_types=[], tags=[])
+    assert '"correspondent": string | null' in p
+    assert "発行元が分からなければ null" in p

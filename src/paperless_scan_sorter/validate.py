@@ -30,7 +30,7 @@ class Classification:
     """検証を通した分類結果。
 
     title・correspondent・document_type が None のときは「不採用」を表し、
-    呼び出し側は確認待ちに回す。
+    呼び出し側は確認待ちに回す。correspondent は書類から分からないときも None になる。
 
     title はパス用に無害化済み。correspondent と document_type は既存の名前と
     そのまま照合できるよう制御文字と前後の空白だけを除いてある。correspondent を
@@ -135,7 +135,7 @@ def parse_classification(
 
     if not (
         isinstance(title, str)
-        and isinstance(correspondent, str)
+        and (correspondent is None or isinstance(correspondent, str))
         and isinstance(document_type, str)
         and isinstance(raw_tags, list)
         and all(isinstance(t, str) for t in raw_tags)
@@ -151,7 +151,7 @@ def parse_classification(
 
     return Classification(
         title=sanitize_component(title, TITLE_MAX),
-        correspondent=_clean_name(correspondent),
+        correspondent=None if correspondent is None else _clean_name(correspondent),
         document_type=_clean_name(document_type),
         tags=tuple(picked[:TAGS_MAX]),
         created=_parse_created(created, today),
