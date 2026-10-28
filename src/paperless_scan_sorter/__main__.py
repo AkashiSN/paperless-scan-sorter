@@ -15,6 +15,8 @@ from paperless_scan_sorter.claude import ClaudeClient
 from paperless_scan_sorter.config import load_settings
 from paperless_scan_sorter.errors import MissingTagsError
 from paperless_scan_sorter.failures import CreatedStore, FailureStore
+from paperless_scan_sorter.originals import OriginalsStore
+from paperless_scan_sorter.page_processor import PageCycleResult, run_page_cycle
 from paperless_scan_sorter.paperless import PaperlessClient
 from paperless_scan_sorter.processor import CycleResult, run_cycle
 
@@ -41,8 +43,18 @@ def _summary(r: CycleResult) -> str:
     )
 
 
+def _page_summary(r: PageCycleResult) -> str:
+    return (
+        f"ページ整形: fixed={r.fixed} unchanged={r.unchanged} review={r.review} aborted={r.aborted}"
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    """設定を読み、`--once` なら 1 周期、そうでなければ停止要求まで周期を回す。"""
+    """設定を読み、`--once` なら 1 周期、そうでなければ停止要求まで周期を回す。
+
+    1 周期ではページ整形を先に回し、直した書類をその回の分類で処理する。片方が
+    想定外の例外で止まっても、もう片方は回す。
+    """
     parser = argparse.ArgumentParser(prog="paperless-scan-sorter")
     parser.add_argument("--once", action="store_true", help="1 周期だけ回して終わる")
     args = parser.parse_args(argv)
@@ -65,10 +77,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     settings.state_dir.mkdir(parents=True, exist_ok=True)
     store = FailureStore(settings.state_dir / "failures.json")
     created = CreatedStore(settings.state_dir / "created.json")
+    originals = OriginalsStore(settings.state_dir / "originals")
     claude = ClaudeClient(model=settings.model, timeout=settings.claude_timeout, env=os.environ)
     paperless = PaperlessClient(settings.paperless_url, settings.paperless_token)
     try:
         while True:
+            failed = False
+            try:
+                logger.info(_page_summary(run_page_cycle(paperless, originals)))
+            except MissingTagsError as e:
+                logger.error("設定の見直しが必要: %s", e)
+                return 1
+            except Exception:
+                logger.exception("ページ整形の周期で想定外の例外")
+                failed = True
             try:
                 result = run_cycle(paperless, claude, store, created, today=date.today())
                 logger.info(_summary(result))
@@ -77,9 +99,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 1
             except Exception:
                 logger.exception("周期の処理で想定外の例外")
-                if args.once:
-                    return 1
-            if args.once or _stop.wait(settings.interval):
+                failed = True
+            if args.once:
+                return 1 if failed else 0
+            if _stop.wait(settings.interval):
                 return 0
     finally:
         paperless.close()

@@ -25,8 +25,10 @@ FROM python:3.14-slim-bookworm
 ARG CLAUDE_CODE_VERSION=2.1.311
 
 # TZ 環境変数でローカル時刻（date.today()）を決めるため、タイムゾーンのデータを入れる。
+# ページ整形はページの画像化とテキスト抽出に poppler を、向きの検出に tesseract の OSD を使う。
 RUN apt-get update \
-    && apt-get install --yes --no-install-recommends tzdata \
+    && apt-get install --yes --no-install-recommends \
+        tzdata poppler-utils tesseract-ocr tesseract-ocr-osd \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=node /usr/local/bin/node /usr/local/bin/node
