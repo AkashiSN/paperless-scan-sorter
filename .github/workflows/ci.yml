@@ -28,6 +28,10 @@ jobs:
         # --locked: uv.lock と pyproject.toml が食い違っていたら落とす。
         run: uv sync --locked
 
+      - name: PDF を読む道具を入れる
+        # ページ整形の測定（tests/test_pdfpages.py の実物テスト）が使う。
+        run: sudo apt-get update -qq && sudo apt-get install -y poppler-utils tesseract-ocr tesseract-ocr-osd
+
       - name: lint
         run: |
           uv run ruff check .
