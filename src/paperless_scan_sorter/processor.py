@@ -179,13 +179,15 @@ def run_cycle(
             continue
         previous_cli_failure = False
         store.clear(doc.id)
-        if decision.title is not None:
+        # 確認待ちのタイトルは人の確認を経ていないので、ai-done と同じく例にしない。
+        # 自動マッチで決まっていた発行元・文書タイプは Decision では None なので、書類の値を使う。
+        if decision.title is not None and not decision.review:
             examples.insert(
                 0,
                 _example(
                     decision.title,
-                    decision.correspondent,
-                    decision.document_type,
+                    doc.correspondent if decision.correspondent is None else decision.correspondent,
+                    doc.document_type if decision.document_type is None else decision.document_type,
                     correspondents,
                     document_types,
                 ),

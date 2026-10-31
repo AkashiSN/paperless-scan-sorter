@@ -833,8 +833,10 @@ def test_ai_doneの書類のタイトルを例としてプロンプトに入れ�
     claude = FakeClaude(ok(_answer()))
     run_cycle(server.client(), claude.client(), store, created, today=TODAY)
     prompt = claude.calls[0]["argv"][-1]
-    assert "- ○○銀行 / 請求書: 取引報告書 2026年9月分\n" in prompt
-    assert "- （発行元なし） / （種類なし）: メモ\n" in prompt
+    assert (
+        '- {"発行元": "○○銀行", "種類": "請求書", "タイトル": "取引報告書 2026年9月分"}\n' in prompt
+    )
+    assert '- {"発行元": null, "種類": null, "タイトル": "メモ"}\n' in prompt
     assert server.example_params[0]["tags__id__all"] == str(AI_DONE)
     assert server.example_params[0]["page_size"] == str(EXAMPLE_DOCS)
 
@@ -846,10 +848,10 @@ def test_同じ周期で先に決めたタイトルも次の書類の例にす�
     claude = FakeClaude(ok(_answer(title="診療費 請求書兼領収証")), ok(_answer()))
     run_cycle(server.client(), claude.client(), store, created, today=TODAY)
     assert "診療費 請求書兼領収証" not in claude.calls[0]["argv"][-1]
-    assert "- ○○銀行 / 請求書: 診療費 請求書兼領収証\n" in claude.calls[1]["argv"][-1]
+    assert '"タイトル": "診療費 請求書兼領収証"' in claude.calls[1]["argv"][-1]
 
 
-def test_同じ周期で作った発行元も次の書類の候補と例に出る(
+def test_同じ周期で作った発行元は次の書類の候補に出るが_確認待ちなので例には出ない(
     store: FailureStore, created: CreatedStore
 ) -> None:
     server = FakePaperless([_doc(100), _doc(101)])
@@ -857,7 +859,7 @@ def test_同じ周期で作った発行元も次の書類の候補と例に出�
     run_cycle(server.client(), claude.client(), store, created, today=TODAY)
     second = claude.calls[1]["argv"][-1]
     assert "\n- △△病院\n" in second
-    assert "- △△病院 / 請求書: 領収証\n" in second
+    assert '"タイトル": "領収証"' not in second
 
 
 def test_タイトルの例を取れなければ周期を打ち切る(
@@ -869,3 +871,24 @@ def test_タイトルの例を取れなければ周期を打ち切る(
     r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
     assert r == CycleResult(aborted=True)
     assert claude.calls == []
+
+
+def test_確認待ちになった書類のタイトルは同じ周期の例にしない(
+    store: FailureStore, created: CreatedStore
+) -> None:
+    server = FakePaperless([_doc(100), _doc(101)])
+    claude = FakeClaude(ok(_answer(title="未確認のタイトル", confident=False)), ok(_answer()))
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
+    assert r.review == 1
+    assert "未確認のタイトル" not in claude.calls[1]["argv"][-1]
+
+
+def test_自動マッチ済みの発行元と種類は同じ周期の例に名前で出る(
+    store: FailureStore, created: CreatedStore
+) -> None:
+    server = FakePaperless([_doc(100, correspondent=10, document_type=20), _doc(101)])
+    claude = FakeClaude(ok(_answer(title="取引報告書 2026年9月分")), ok(_answer()))
+    run_cycle(server.client(), claude.client(), store, created, today=TODAY)
+    assert '"○○銀行"' in claude.calls[1]["argv"][-1]
+    assert "取引報告書 2026年9月分" in claude.calls[1]["argv"][-1]
+    assert "（発行元なし）" not in claude.calls[1]["argv"][-1]
