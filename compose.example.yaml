@@ -7,7 +7,7 @@
 
 services:
   paperless:
-    # 運用では版を固定する。
+    # 運用では版を固定する（例: ghcr.io/paperless-ngx/paperless-ngx:3.3.4）。
     image: ghcr.io/paperless-ngx/paperless-ngx:latest
     restart: unless-stopped
     depends_on:
@@ -38,11 +38,15 @@ services:
       PAPERLESS_SECRET_KEY: ${PAPERLESS_SECRET_KEY}
       PAPERLESS_OCR_LANGUAGE: jpn+eng
       PAPERLESS_OCR_LANGUAGES: jpn
-      PAPERLESS_OCR_MODE: skip
+      # 文字の入ったページは OCR し直さない。3.x では skip が無くなり、auto が同じ意味になる。
+      PAPERLESS_OCR_MODE: auto
       PAPERLESS_TIME_ZONE: ${TZ}
+      # リバースプロキシの後ろに置くときの公開 URL（例: https://paperless.example.com）。
+      # ログイン時の CSRF の確認に使う。空なら設定しない。
+      PAPERLESS_URL: ${PAPERLESS_PUBLIC_URL:-}
       # 配置は 発行元/年/日付_タイトル（設計書 8 章）。
       PAPERLESS_FILENAME_FORMAT: '{% if correspondent and correspondent != "none" %}{{ correspondent }}{% else %}未分類{% endif %}/{{ created_year }}/{{ created }}_{{ title }}'
-      # 除外用サブフォルダ（private/）を見るため。
+      # 通常のスキャン（scan/）と Claude に送らない書類（private/）をサブフォルダで分けるため。
       PAPERLESS_CONSUMER_RECURSIVE: "true"
       # SMB 経由の書き込みは inotify で拾えない場合があるため、ポーリングする。
       PAPERLESS_CONSUMER_POLLING: "60"
@@ -53,7 +57,8 @@ services:
     image: postgres:17
     restart: unless-stopped
     volumes:
-      - ${PAPERLESS_ROOT}/pgdata:/var/lib/postgresql/data
+      # 既定は PAPERLESS_ROOT の下。DB だけ SSD などに置くときは PGDATA_DIR で指定する。
+      - ${PGDATA_DIR:-${PAPERLESS_ROOT}/pgdata}:/var/lib/postgresql/data
     environment:
       POSTGRES_DB: paperless
       POSTGRES_USER: paperless
