@@ -69,7 +69,7 @@ flowchart LR
 | スキャナー | スキャンし、SMB 共有へ直接保存 | ファームウェアを最新にする。ネットワークフォルダー用の保存プロファイルを作る（ScanSnap iX シリーズなら ScanSnap Home で作り、タッチパネルに登録する）。検索可能 PDF にはせず、画像のみの PDF で保存する（OCR は Paperless に一本化）。NTP に到達できること |
 | NAS の SMB 共有 `scans-inbox` | Paperless の取り込み口 | スキャナー専用ユーザーを作り、この共有への書き込み権限だけを与える（スキャナーが読み取り権限も要求するかは実機で確認）。SMB2/3 のみ |
 | Paperless-ngx | 取り込み、OCR、全文検索、メタデータ管理、ファイル配置 | TrueNAS アプリ、またはカスタムアプリ。PostgreSQL と Redis を併用。OCR 言語は `jpn+eng`。`PAPERLESS_OCR_MODE=skip`（スキャナー側でテキスト層を付けないので、実質すべてのページを `jpn+eng` で OCR する） |
-| ai-classifier（このリポジトリ） | Claude Code で書類を判定し、Paperless API で結果を書き戻す | Python と Claude Code CLI のコンテナ。`CLAUDE_CODE_OAUTH_TOKEN` でサブスクリプションプランを使う。5 分ごとにポーリング |
+| ai-classifier（このリポジトリ） | Claude Code で書類を判定し、Paperless API で結果を書き戻す | Python と Claude Code CLI のコンテナ。`CLAUDE_CODE_OAUTH_TOKEN` でサブスクリプションプランを使う。5 分ごとにポーリングし、Paperless のワークフローの Webhook を受けたらすぐに処理する |
 | Cloud Sync（TrueNAS） | 整理済みのファイルを Google Drive へ同期 | Paperless のアーカイブ版（`media/documents/archive`、OCR テキスト付きで Drive 上でも検索できる）を PUSH・SYNC モードで同期。Drive 側の変更は取り込まない |
 
 **スキャナーの直接保存の制約:** 機種によっては、ネットワークフォルダーへの直接保存で原稿種別の自動判別、最高画質、OCR 言語の選択が使えない（ScanSnap iX シリーズなど）。スキャナーの OCR は日本語に向かない可能性があるため使わず、OCR は Paperless（Tesseract `jpn`）で行う。ただし分類と Paperless の本文は、Claude に原本の PDF を読ませて得る（7 章、[D-020](decisions.md)）。
@@ -80,7 +80,7 @@ flowchart LR
 
 1. スキャナーが `scans-inbox` に PDF を保存する
 2. Paperless が取り込み、OCR とインデックス化を行う。取り込み時のワークフローで `inbox` と `ai-todo` を付ける
-3. ai-classifier が 5 分ごとに API で `ai-todo` の書類を取得する
+3. ai-classifier が 5 分ごとに API で `ai-todo` の書類を取得する。取り込みの後に Paperless のワークフローが Webhook（`POST http://ai-classifier:8080/wake`）を送れば、5 分を待たずにすぐ取得する（D-021）
 4. 原本の PDF と既存の発行元・文書タイプ・タグの一覧を `claude -p` に渡し、分類とページごとの書き起こしの JSON を受け取る。長い書類は 5 ページずつに分けて読ませる（7 章）。タグの一覧からは状態管理用のタグ（下表）を除く
 5. JSON を検証し（7 章）、PATCH でタイトル・発行元・文書タイプ・タグ・書類日付と、書き起こした本文（`content`）を書き戻す。タグは既存のタグにマージして送る（PATCH の `tags` は置き換えになるため）
    - `confident: true` で発行元・文書タイプが既存のもの → `ai-todo` を外して `ai-done` を付け、`inbox` も外す
@@ -298,7 +298,7 @@ Paperless-ngx 一式と ai-classifier を、TrueNAS の 1 つのカスタムア�
 | `paperless` | `ghcr.io/paperless-ngx/paperless-ngx` | `PAPERLESS_OCR_LANGUAGE=jpn+eng`、`PAPERLESS_OCR_LANGUAGES=jpn`、`PAPERLESS_OCR_MODE=skip`、`PAPERLESS_TIME_ZONE`（利用者のタイムゾーン）、`PAPERLESS_FILENAME_FORMAT`（8 章）、`PAPERLESS_CONSUMER_RECURSIVE=true`（除外用サブフォルダのため）、`PAPERLESS_CONSUMER_POLLING=60`（SMB 経由の書き込みは inotify で拾えない場合があるため）、`USERMAP_UID`/`USERMAP_GID` |
 | `db` | `postgres` | Paperless 専用 |
 | `broker` | `redis` | Paperless のタスクキュー |
-| `ai-classifier` | `ghcr.io/akashisn/paperless-scan-sorter`（このリポジトリの CI が main とタグから作る。Python ＋ Claude Code CLI。ページ整形用に poppler と tesseract を含む） | `PAPERLESS_URL`、`PAPERLESS_TOKEN`（専用ユーザーの API トークン。`PAPERLESS_TOKEN_FILE` でファイルから読むこともできる）、`CLAUDE_CODE_OAUTH_TOKEN`、`INTERVAL=300`、`STATE_DIR=/state`、`CLAUDE_MODEL=sonnet`、`CLAUDE_TIMEOUT=600`（秒）、`TZ`（Paperless と同じタイムゾーン。`created` の未来日判定の「今日」に使う） |
+| `ai-classifier` | `ghcr.io/akashisn/paperless-scan-sorter`（このリポジトリの CI が main とタグから作る。Python ＋ Claude Code CLI。ページ整形用に poppler と tesseract を含む） | `PAPERLESS_URL`、`PAPERLESS_TOKEN`（専用ユーザーの API トークン。`PAPERLESS_TOKEN_FILE` でファイルから読むこともできる）、`CLAUDE_CODE_OAUTH_TOKEN`、`INTERVAL=300`、`STATE_DIR=/state`、`CLAUDE_MODEL=sonnet`、`CLAUDE_TIMEOUT=600`（秒）、`WEBHOOK_TOKEN`（任意。16 文字以上。あれば Compose の内部ネットワークで `:8080/wake` を待ち受ける。`WEBHOOK_PORT` で変えられる）、`TZ`（Paperless と同じタイムゾーン。`created` の未来日判定の「今日」に使う） |
 
 - ai-classifier には Paperless 用の専用ユーザーを作る。権限は、書類とタグの閲覧・変更、発行元と文書タイプの閲覧・変更・追加（新規作成のため）だけにする
 - ページ整形の `edit_pdf` は、書類の変更権限に加えて、書類の所有者が無いか ai-classifier のユーザー自身であることを求める（Paperless-ngx 3.3.4 で確認）。満たさない書類は 403 になり、`page-review` を付けて分類へ進む（6.3）。取り込み時のワークフローでは所有者を設定しないか、ai-classifier のユーザーにする

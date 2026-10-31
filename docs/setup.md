@@ -107,3 +107,21 @@ docker compose -f compose.example.yaml up -d
 既定では 5 分（`INTERVAL=300`）ごとに、`page-todo` の書類のページを直してから `ai-todo` の書類を分類する。週に 1 回程度、保存ビュー「確認待ち」（`ai-review`・`page-review`・`ai-failed` のいずれか）を見て直す（設計書 10 章）。
 
 AI が新しく作った発行元・文書タイプの名前が気に入らないときは、削除せずに Paperless の管理画面で名前を変えるか、既存のものに統合する。同じ名前を使う他の書類にもまとめて反映される（[D-006](decisions.md)）。削除すると、その名前を使っていた書類は発行元・文書タイプが空になり、ファイルが `未分類/` に移る。
+
+## 6. Webhook ですぐ起こす（任意）
+
+既定の `INTERVAL` ごとの周期では、取り込みから分類まで最大で `INTERVAL` 分待つ。Paperless のワークフローの Webhook で ai-classifier を起こすと、取り込みが終わってすぐに処理が始まる（[D-021](decisions.md)）。`INTERVAL` ごとの周期は保険として残る。
+
+1. 合言葉を作る（16 文字以上。`openssl rand -base64 32` など）。`.env` の `WEBHOOK_TOKEN` に入れて、ai-classifier を作り直す。ログに `Webhook の受け口をポート 8080 で開いた` と出れば待ち受けている。受け口は Compose の内部ネットワークだけで使うので、`ports` に足さない
+2. Paperless でワークフローを 1 つ足す。トリガーは「書類が追加された」、アクションは「Webhook」にして、次のとおりにする
+
+| 項目 | 値 |
+| --- | --- |
+| URL | `http://ai-classifier:8080/wake` |
+| ヘッダー | `Authorization`: `Bearer <WEBHOOK_TOKEN の値>` |
+| 本文・パラメーター | 空のままでよい（ai-classifier は中身を読まない） |
+| 書類を付ける | 付けない |
+
+手で `ai-todo` や `page-todo` を付け直したときもすぐ処理させたいなら、同じワークフローにトリガー「書類が更新された」を足し、「次のタグのいずれかを持つ」に `ai-todo` と `page-todo` を指定する。タグで絞らないと、ai-classifier 自身の書き戻しでも Webhook が送られ、空の周期が 1 回余分に回る。
+
+合言葉が合わない要求は 401 で捨て、ai-classifier のログに `Webhook の合言葉が合わない` と出る。

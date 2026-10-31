@@ -14,6 +14,9 @@ DEFAULT_INTERVAL = 300
 DEFAULT_STATE_DIR = "/state"
 DEFAULT_MODEL = "sonnet"
 DEFAULT_CLAUDE_TIMEOUT = 600.0
+DEFAULT_WEBHOOK_PORT = 8080
+# 推測されにくいよう、Webhook の合言葉には最低限の長さを求める。
+WEBHOOK_TOKEN_MIN = 16
 
 
 @dataclass(frozen=True)
@@ -26,6 +29,9 @@ class Settings:
     state_dir: Path
     model: str
     claude_timeout: float
+    # None なら Webhook の受け口を開かず、INTERVAL ごとの周期だけで動く。
+    webhook_token: str | None = field(default=None, repr=False)
+    webhook_port: int = DEFAULT_WEBHOOK_PORT
 
 
 def _get(env: Mapping[str, str], name: str) -> str | None:
@@ -84,6 +90,27 @@ def _claude_timeout(env: Mapping[str, str]) -> float:
     return value
 
 
+def _webhook_token(env: Mapping[str, str]) -> str | None:
+    token = _get(env, "WEBHOOK_TOKEN")
+    if token is not None and len(token) < WEBHOOK_TOKEN_MIN:
+        raise ValueError(f"WEBHOOK_TOKEN は {WEBHOOK_TOKEN_MIN} 文字以上")
+    return token
+
+
+def _webhook_port(env: Mapping[str, str]) -> int:
+    raw = _get(env, "WEBHOOK_PORT")
+    if raw is None:
+        return DEFAULT_WEBHOOK_PORT
+    try:
+        value = int(raw)
+    except ValueError:
+        value = -1
+    # 0 は空いているポートを OS に選ばせる（テスト用）。
+    if not 0 <= value <= 65535:
+        raise ValueError("WEBHOOK_PORT は 0〜65535 の整数")
+    return value
+
+
 def load_settings(env: Mapping[str, str]) -> Settings:
     """環境変数から Settings を作る。"""
     url = _require(env, "PAPERLESS_URL").rstrip("/")
@@ -97,4 +124,6 @@ def load_settings(env: Mapping[str, str]) -> Settings:
         state_dir=Path(_get(env, "STATE_DIR") or DEFAULT_STATE_DIR),
         model=_get(env, "CLAUDE_MODEL") or DEFAULT_MODEL,
         claude_timeout=_claude_timeout(env),
+        webhook_token=_webhook_token(env),
+        webhook_port=_webhook_port(env),
     )

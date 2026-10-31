@@ -99,3 +99,26 @@ def test_reprにトークンを出さない() -> None:
     s = load_settings(BASE)
     assert "secret-token" not in repr(s)
     assert "oauth-secret" not in repr(s)
+
+
+def test_WEBHOOK_TOKENが無ければ受け口を開かない() -> None:
+    s = load_settings(BASE)
+    assert (s.webhook_token, s.webhook_port) == (None, 8080)
+
+
+def test_WEBHOOK_TOKENとポートを読む() -> None:
+    s = load_settings(BASE | {"WEBHOOK_TOKEN": "t" * 32, "WEBHOOK_PORT": "9000"})
+    assert (s.webhook_token, s.webhook_port) == ("t" * 32, 9000)
+    assert "t" * 32 not in repr(s)
+
+
+def test_WEBHOOK_TOKENは16文字以上() -> None:
+    with pytest.raises(ValueError, match="WEBHOOK_TOKEN") as e:
+        load_settings(BASE | {"WEBHOOK_TOKEN": "short"})
+    assert "short" not in str(e.value)
+
+
+@pytest.mark.parametrize("v", ["-1", "65536", "abc"])
+def test_WEBHOOK_PORTは0から65535(v: str) -> None:
+    with pytest.raises(ValueError, match="WEBHOOK_PORT"):
+        load_settings(BASE | {"WEBHOOK_TOKEN": "t" * 32, "WEBHOOK_PORT": v})
