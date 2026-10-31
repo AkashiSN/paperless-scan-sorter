@@ -190,3 +190,34 @@ def test_本文の長さの扱い(extra: str, status: int) -> None:
         assert event.is_set() is (status == 204)
     finally:
         srv.close()
+
+
+def test_少しずつ送り続ける接続も接続からの期限で切る() -> None:
+    srv = WakeServer(TOKEN, threading.Event(), host="127.0.0.1", port=0, read_timeout=0.3)
+    srv.start()
+    sock = _raw(srv)
+    start = time.monotonic()
+    cut = False
+    try:
+        sock.sendall(b"POST /wake HTTP/1.1\r\n")
+        # 無通信の期限（0.3 秒）より短い間隔でヘッダーを 1 バイトずつ送り続ける。
+        while time.monotonic() - start < 5:
+            try:
+                sock.sendall(b"X")
+            except OSError:
+                cut = True
+                break
+            sock.settimeout(0.05)
+            try:
+                if sock.recv(64) == b"":
+                    cut = True
+                    break
+            except TimeoutError:
+                pass
+        assert cut
+        assert time.monotonic() - start < 2
+    finally:
+        sock.close()
+        close_start = time.monotonic()
+        srv.close()
+        assert time.monotonic() - close_start < 2
