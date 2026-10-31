@@ -18,7 +18,7 @@ from paperless_scan_sorter.errors import (
 from paperless_scan_sorter.failures import CreatedStore, FailureStore
 from paperless_scan_sorter.paperless import Document, Named, PaperlessClient
 from paperless_scan_sorter.pdfpages import PdfChunk, split_pdf
-from paperless_scan_sorter.prompt import TRANSCRIBE_PROMPT, build_prompt, page_note
+from paperless_scan_sorter.prompt import TRANSCRIBE_PROMPT, TitleExample, build_prompt, page_note
 from paperless_scan_sorter.tags import REQUIRED_TAGS
 from paperless_scan_sorter.validate import (
     Classification,
@@ -29,6 +29,9 @@ from paperless_scan_sorter.validate import (
 logger = logging.getLogger(__name__)
 
 MAX_FAILURES = 3
+# タイトルの例に使う、ai-done の書類の件数（新しい順）。ai-done は Claude が処理した書類に
+# しか付かないので、private/ の書類のタイトルは例に入らない（D-022）。
+EXAMPLE_DOCS = 200
 # 前回の試行で発行元・文書タイプを作った書類を確認待ちにするときの理由。
 CREATED_BEFORE_REASON = "前回の試行で発行元・文書タイプを新規作成"
 # claude に 1 回で読ませる PDF の上限。書き起こしが出力の上限で切れないようページ数を抑え、
@@ -89,6 +92,7 @@ def run_cycle(
         document_types = paperless.document_types()
         ids = resolve_tag_ids(tags)
         docs = paperless.documents_with_tag(ids.ai_todo)
+        titled = paperless.recent_titles(ids.ai_done, limit=EXAMPLE_DOCS)
         # 新規作成の記録が読めないまま進むと、確認待ちに回すべき書類を見落とす（D-009）。
         created.check()
     except ServiceUnavailable as e:
@@ -97,11 +101,11 @@ def run_cycle(
         return result
 
     tag_names = {t.name: t.id for t in tags}
-    prompt = build_prompt(
-        correspondents=[n.name for n in correspondents],
-        document_types=[n.name for n in document_types],
-        tags=tag_names,
-    )
+    # 新しい順。この周期で決めたタイトルは先頭に足し、同じ周期の後の書類の例にする。
+    examples = [
+        _example(t.title, t.correspondent, t.document_type, correspondents, document_types)
+        for t in titled
+    ]
 
     # 直前に処理した書類が CLI の失敗で終わったか。障害を示す語を含まない障害でも、
     # 1 周期で数えるのを 1 件までにする（D-010）。
@@ -117,6 +121,13 @@ def run_cycle(
                 result.aborted = True
                 return result
             continue
+        # 同じ周期で作った発行元・文書タイプと決めたタイトルも候補と例に入るよう、書類ごとに組む。
+        prompt = build_prompt(
+            correspondents=[n.name for n in correspondents],
+            document_types=[n.name for n in document_types],
+            tags=tag_names,
+            examples=examples,
+        )
         try:
             decision, content = _classify(
                 doc,
@@ -168,6 +179,19 @@ def run_cycle(
             continue
         previous_cli_failure = False
         store.clear(doc.id)
+        # 確認待ちのタイトルは人の確認を経ていないので、ai-done と同じく例にしない。
+        # 自動マッチで決まっていた発行元・文書タイプは Decision では None なので、書類の値を使う。
+        if decision.title is not None and not decision.review:
+            examples.insert(
+                0,
+                _example(
+                    decision.title,
+                    doc.correspondent if decision.correspondent is None else decision.correspondent,
+                    doc.document_type if decision.document_type is None else decision.document_type,
+                    correspondents,
+                    document_types,
+                ),
+            )
         if decision.review:
             result.review += 1
             logger.info("書類 %d: review (%s)", doc.id, ", ".join(decision.reasons))
@@ -181,6 +205,23 @@ def run_cycle(
             result.aborted = True
             return result
     return result
+
+
+def _example(
+    title: str,
+    correspondent: int | None,
+    document_type: int | None,
+    correspondents: Sequence[Named],
+    document_types: Sequence[Named],
+) -> TitleExample:
+    """ID で持つ発行元・文書タイプを名前に引いて、タイトルの例にする。"""
+
+    def name(items: Sequence[Named], item_id: int | None) -> str | None:
+        return next((n.name for n in items if n.id == item_id), None)
+
+    return TitleExample(
+        name(correspondents, correspondent), name(document_types, document_type), title
+    )
 
 
 def _read(

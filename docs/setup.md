@@ -104,7 +104,7 @@ docker compose -f compose.example.yaml run --rm ai-classifier --once
 docker compose -f compose.example.yaml up -d
 ```
 
-既定では 5 分（`INTERVAL=300`）ごとに、`page-todo` の書類のページを直してから `ai-todo` の書類を分類する。週に 1 回程度、保存ビュー「確認待ち」（`ai-review`・`page-review`・`ai-failed` のいずれか）を見て直す（設計書 10 章）。
+既定では 5 分（`INTERVAL=300`）ごとに、`page-todo` の書類のページを直してから `ai-todo` の書類を分類する。週に 1 回程度、保存ビュー「確認待ち」（`ai-review`・`page-review`・`ai-failed` のいずれか）を見て直し、確認待ちのタグと `inbox` を外して `ai-done` を付ける（設計書 10 章）。`ai-done` の書類のタイトルは、後の書類のタイトルをそろえる例として Claude に渡される。`private/` の書類には `ai-done` を付けない。
 
 AI が新しく作った発行元・文書タイプの名前が気に入らないときは、削除せずに Paperless の管理画面で名前を変えるか、既存のものに統合する。同じ名前を使う他の書類にもまとめて反映される（[D-006](decisions.md)）。削除すると、その名前を使っていた書類は発行元・文書タイプが空になり、ファイルが `未分類/` に移る。
 
