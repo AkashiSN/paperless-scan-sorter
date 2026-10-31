@@ -43,11 +43,15 @@ Paperless-ngx 一式と ai-classifier を、TrueNAS SCALE の **Apps → Custom 
 
 以降、`<root>` は `/mnt/<pool>/paperless` を指します。
 
+PostgreSQL のデータは、小さなランダムな読み書きが中心なので、SSD のプールがあればそちらに置くと速くなります。そのときは `pgdata` を作らず、SSD のプールに `<ssd-pool>/paperless-postgres` などを Generic で作り、手順 5 で `PGDATA_DIR` にそのパスを入れます。スナップショットのタスクも、そのデータセットに足します（手順 9）。
+
+TrueNAS 25.10 では、Generic のプリセットでも ACL の型は NFSv4 になります。ACL は所有者と許可だけの単純なもの（trivial）で aclmode は passthrough なので、手順 3 の `chown` はそのまま効きます。SMB のプリセットの `consume` は aclmode が restricted で `chmod` を拒むので、ACL エディタで権限を付けます。
+
 ## 3. ユーザーと権限
 
 **Credentials → Users** で、次の 2 人を用意します。
 
-- **Paperless の実行ユーザー**（以下 `<paperless-uid>` / `<paperless-gid>`）: Paperless のコンテナがこの UID/GID で動きます（`USERMAP_UID` / `USERMAP_GID`）。既存のユーザーを使っても、専用に作っても構いません
+- **Paperless の実行ユーザー**（以下、ユーザー名を `<paperless-user>`、その UID/GID を `<paperless-uid>` / `<paperless-gid>`）: Paperless のコンテナがこの UID/GID で動きます（`USERMAP_UID` / `USERMAP_GID`）。アプリ用の組み込みユーザー `apps`（UID/GID 568）を使うのが簡単です。専用に作っても構いません
 - **スキャナー用のユーザー**（以下 `<scanner-user>`）: SMB でだけ使う。SMB 以外のログインは要りません
 
 TrueNAS のシェル（**System → Shell**）で所有者を合わせます。
@@ -60,17 +64,19 @@ chown 1000:1000 <root>/classifier
 
 `pgdata` は PostgreSQL のコンテナが初回の起動時に自分で所有者を決めるので、触りません。
 
-`consume` は ACL で権限を付けます（**Datasets → consume → Permissions → Edit**）。
+`consume` は ACL で権限を付けます（**Datasets → consume → Permissions → Edit**）。SMB のプリセットが付けた既定のエントリーは残し、次の 2 つを足します。どちらも Modify で、下のフォルダーに継承させます。
 
 - `<scanner-user>`: 書き込み（ファイルとフォルダーの作成）
-- `<paperless-uid>` のユーザー: 読み取りと削除（取り込んだ後にファイルを消すため）
+- `<paperless-user>`: 読み取りと削除（取り込んだ後にファイルを消すため）
+
+付けたら、`<scanner-user>` で作ったファイルを `<paperless-user>` で消せることを確かめます（`sudo -u <scanner-user> touch <root>/consume/.t && sudo -u <paperless-user> rm <root>/consume/.t`）。
 
 ## 4. SMB 共有を作る
 
 **Shares → SMB → Add** で、`<root>/consume` を共有名 `scans-inbox` で公開します。
 
 - SMB1 は使わない（TrueNAS の既定で無効）
-- 共有の中に `private/` フォルダーを作っておく。Claude に送りたくない書類（マイナンバー・医療関係など）の保存先です（[`design.md`](design.md) 10 章）
+- 共有の中に `scan/` と `private/` のフォルダーを作っておく。`scan/` は通常のスキャンの保存先で、ここに入った書類だけが Claude に送られます。`private/` は Claude に送りたくない書類（マイナンバー・医療関係など）の保存先です（[`design.md`](design.md) 10 章、[D-023](decisions.md)）
 
 同じデータセットを SMB 共有とアプリのホストパスの両方に使うと、Apps のインストール時にホストパスの安全確認で止められることがあります。そのときは **Apps → Configuration → Settings** の「Host Path Safety Checks」を外します。
 
@@ -84,6 +90,8 @@ chown 1000:1000 <root>/classifier
 | --- | --- |
 | `${PAPERLESS_ROOT}` | `<root>`（例: `/mnt/<pool>/paperless`） |
 | `${PAPERLESS_PORT}` | Web UI を出すホスト側のポート。LAN だけに出すなら `"<LAN 側の IP>:<ポート>:8000"` の形にする |
+| `${PAPERLESS_PUBLIC_URL:-}` | リバースプロキシの後ろに置くなら、その公開 URL（例: `https://paperless.example.com`）。無ければ空の文字列 `""` |
+| `${PGDATA_DIR:-${PAPERLESS_ROOT}/pgdata}` | DB を SSD などに置くならそのパス（例: `/mnt/<ssd-pool>/paperless-postgres`）。置かないなら `<root>/pgdata` |
 | `${TZ}` | 利用者のタイムゾーン（IANA 名。例: `Asia/Tokyo`）。2 か所 |
 | `${DB_PASSWORD}` | 乱数で作った長い文字列（`openssl rand -base64 48` など）。2 か所とも同じ値 |
 | `${PAPERLESS_SECRET_KEY}` | 乱数で作った長い文字列 |
@@ -94,7 +102,7 @@ chown 1000:1000 <root>/classifier
 | `${WEBHOOK_PORT:-8080}` | `8080` |
 | `${INTERVAL:-300}` など既定値つきのもの | そのまま既定値（`300`、`sonnet`、`600`）を書く |
 
-Paperless のイメージは配置例では `:latest` です。運用では版を固定します（例: `ghcr.io/paperless-ngx/paperless-ngx:2.x.y`）。ai-classifier のイメージ `ghcr.io/akashisn/paperless-scan-sorter:latest` は main の先頭を指すので、固定したいときは `:sha-1234567` のようにコミットのタグにします。
+Paperless のイメージは配置例では `:latest` です。運用では版を固定します（例: `ghcr.io/paperless-ngx/paperless-ngx:3.3.4`）。ai-classifier のイメージ `ghcr.io/akashisn/paperless-scan-sorter:latest` は main の先頭を指すので、固定したいときは `:sha-1234567` のようにコミットのタグにします。
 
 アプリ画面に「Web UI」ボタンを出したいときは、**貼り付ける前に**トップレベルに `x-portals` を足します。あとから YAML を編集して足しても、ボタンは出ません（Custom App の portals は作成時にしか読まれません）。
 
@@ -121,7 +129,7 @@ docker exec -it <paperless のコンテナ名> python3 manage.py createsuperuser
 続けて、[`setup.md`](setup.md) の「2. Paperless の準備」をそのまま行います。
 
 - 状態管理用のタグ 7 つ（`inbox` `page-todo` `page-review` `ai-todo` `ai-done` `ai-review` `ai-failed`）
-- 取り込み時のワークフロー（`inbox` と、`ai-todo` または `page-todo` を付ける。`private/` に一致しないパスに限る）
+- 取り込み時のワークフロー 2 つ（すべての書類に `inbox`。トリガーを「取り込み開始」にし、パスが `scan/` の書類にだけ `ai-todo` または `page-todo`）
 - ai-classifier 用のユーザーと API トークン
 
 ## 7. ai-classifier を動かす
@@ -147,26 +155,30 @@ ai-classifier のログ（**Apps → paperless → Logs** で ai-classifier を�
 
 | 項目 | 値 |
 | --- | --- |
-| 保存先 | `\\<TrueNAS の IP かホスト名>\scans-inbox` |
+| 保存先 | `\\<TrueNAS の IP かホスト名>\scans-inbox\scan` |
 | ユーザー | `<scanner-user>` |
 | ファイル形式 | PDF。**検索可能 PDF にはしない**（OCR は Paperless に任せる） |
 | 回転 | 自動（使える機種なら） |
 | 白紙ページの削除 | 有効（使える機種なら） |
 | 重送検出 | 有効 |
 
-Claude に送りたくない書類用に、保存先を `\\<…>\scans-inbox\private` にした別のプロファイルも作ります。テスト用の PDF を `private/` に保存して、`ai-todo` も `page-todo` も付かないことを確かめてください。
+Claude に送りたくない書類用に、保存先を `\\<…>\scans-inbox\private` にした別のプロファイルも作ります。それぞれのプロファイルで 1 枚ずつ保存して、`scan` の書類には `inbox` と `ai-todo`（`page-todo`）が、`private` の書類には `inbox` だけが付くことを確かめてください。
+
+1 回のスキャンは 1 つの書類にします。領収書のような 1 枚ものを何枚も一度に読ませると 1 つの PDF になり、書類日付やタイトルが 1 つにまとまってしまいます。ファイルサーバーに保存するプロファイルでは、機種によってファイルの分割や傾きの補正が使えません。傾きは Paperless の OCR がアーカイブ版で補正します（`deskew` は既定で有効）。
 
 スキャナーが NTP に到達できることも確かめます（ファイルの日時がずれるため）。
 
 ## 9. スナップショットと書き出し
 
-**Data Protection → Periodic Snapshot Tasks → Add** で、`<pool>/paperless` を**再帰的に**、毎日、30 日保持にします。
+**Data Protection → Periodic Snapshot Tasks → Add** で、`<pool>/paperless` を**再帰的に**、毎日 0:00、30 日保持にします。DB を別のデータセット（`PGDATA_DIR`）に置いたときは、そのデータセットにも同じ時刻・同じ保持のタスクを足します。同じ時刻に撮ると、ファイルと DB のずれが小さくなります。
 
-書類とメタデータの一式は、週に 1 回 `document_exporter` で `export` に書き出します。**System → Advanced → Cron Jobs → Add** で、root として週 1 回、次を実行します。
+書類とメタデータの一式は、週に 1 回 `document_exporter` で `export` に書き出します。**System → Advanced → Cron Jobs → Add** で、root として、スナップショットの少し前（例: 日曜 23:30）に次を実行します。直後のスナップショットに書き出しの結果が入ります。
 
 ```bash
-docker exec <paperless のコンテナ名> document_exporter ../export
+docker exec ix-paperless-paperless-1 document_exporter ../export
 ```
+
+コンテナ名はアプリ名が `paperless` のときのものです（`docker ps --format '{{.Names}}' | grep paperless` で確かめる）。設定したら一度手で動かし、`export/` に `manifest.json` ができることを確かめます。`manifest.json` にはユーザーの情報と API トークンも入るので、`export` は SMB で共有しません。
 
 スナップショットから原本のファイルだけを戻すと、Paperless のデータベースと食い違います。戻し方は [`design.md`](design.md) の 6.2 を見てください。
 
