@@ -190,8 +190,9 @@ def parse_classification(
 def parse_pages(result_text: str, *, expected: int) -> tuple[PageText, ...]:
     """Claude の出力から、ページごとの書き起こし（`pages`）を取り出して検証する。
 
-    1〜expected のページがちょうど 1 回ずつ揃わない、キーが欠ける、型が違うときは
-    DocumentFailure を送出する。長すぎる本文とページ番号は切り詰める。
+    1〜expected のページがちょうど 1 回ずつ揃わない、page か text のキーが欠ける、型が違う
+    ときは DocumentFailure を送出する。label のキーが無ければ None とする。長すぎる本文と
+    ページ番号は切り詰める。
     """
     obj = _extract_object(result_text)
     rows = obj.get("pages")
@@ -199,9 +200,11 @@ def parse_pages(result_text: str, *, expected: int) -> tuple[PageText, ...]:
         raise DocumentFailure("出力の pages が配列でない")
     pages: dict[int, PageText] = {}
     for row in rows:
-        if not isinstance(row, dict) or not {"page", "text", "label"} <= row.keys():
+        if not isinstance(row, dict) or not {"page", "text"} <= row.keys():
             raise DocumentFailure("出力の pages の要素にキーがない")
-        number, text, label = row["page"], row["text"], row["label"]
+        # label は印字されたページ番号の手がかりで、無いページでは省かれることがある。
+        # 省かれていれば無い（None）として扱い、書類の失敗には数えない。
+        number, text, label = row["page"], row["text"], row.get("label")
         if not (
             type(number) is int
             and isinstance(text, str)

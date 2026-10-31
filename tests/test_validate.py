@@ -237,8 +237,8 @@ def test_parse_pages_ページが過不足なく揃わなければ書類起因�
         _row(text=None),
         _row(text=1),
         _row(label=2),
-        {"page": 1, "text": "本文"},
         {"page": 1, "label": None},
+        {"text": "本文", "label": None},
         "本文",
     ],
 )
@@ -251,3 +251,8 @@ def test_parse_pages_型が違えば書類起因の失敗(row: object) -> None:
 def test_parse_pages_pagesが無いか配列でなければ書類起因の失敗(text: str) -> None:
     with pytest.raises(DocumentFailure):
         parse_pages(text, expected=1)
+
+
+def test_parse_pages_labelのキーが無ければNoneとして扱う() -> None:
+    (page,) = parse_pages(_pages({"page": 1, "text": "本文"}), expected=1)
+    assert page == PageText(1, "本文", None)
