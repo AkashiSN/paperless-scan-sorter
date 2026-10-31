@@ -21,7 +21,14 @@ def no_page_cycle(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture
 def env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    for k in ("PAPERLESS_TOKEN_FILE", "INTERVAL", "CLAUDE_MODEL", "CLAUDE_TIMEOUT"):
+    for k in (
+        "PAPERLESS_TOKEN_FILE",
+        "INTERVAL",
+        "CLAUDE_MODEL",
+        "CLAUDE_TIMEOUT",
+        "WEBHOOK_TOKEN",
+        "WEBHOOK_PORT",
+    ):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("PAPERLESS_URL", "https://paperless.example.com")
     monkeypatch.setenv("PAPERLESS_TOKEN", "secret-token")
@@ -229,3 +236,59 @@ def test_常駐ループはページ整形の例外でも分類を回し次の�
     monkeypatch.setattr(app, "run_cycle", fake)
     assert app.main([]) == 0
     assert (pages, calls) == (2, 2)
+
+
+def test_起こされたら待たずに次の周期を回す(monkeypatch: pytest.MonkeyPatch, env: None) -> None:
+    monkeypatch.setenv("INTERVAL", "3600")
+    calls = 0
+
+    def fake(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            app.request_wake()
+        else:
+            app.request_stop()
+        return CycleResult()
+
+    monkeypatch.setattr(app, "run_cycle", fake)
+    assert app.main([]) == 0
+    assert calls == 2
+
+
+def test_WEBHOOK_TOKENがあれば受け口を開き終了時に閉じる(
+    monkeypatch: pytest.MonkeyPatch, env: None
+) -> None:
+    monkeypatch.setenv("WEBHOOK_TOKEN", "w" * 32)
+    monkeypatch.setenv("WEBHOOK_PORT", "0")
+    events: list[str] = []
+
+    class FakeServer:
+        def __init__(self, token, event, *, host, port):  # noqa: ANN001
+            events.append(f"init {host} {port} {token == 'w' * 32}")
+
+        def start(self) -> None:
+            events.append("start")
+
+        def close(self) -> None:
+            events.append("close")
+
+    def fake(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        app.request_stop()
+        return CycleResult()
+
+    monkeypatch.setattr(app, "WakeServer", FakeServer)
+    monkeypatch.setattr(app, "run_cycle", fake)
+    assert app.main([]) == 0
+    assert events == ["init 0.0.0.0 0 True", "start", "close"]
+
+
+def test_onceでは受け口を開かない(monkeypatch: pytest.MonkeyPatch, env: None) -> None:
+    monkeypatch.setenv("WEBHOOK_TOKEN", "w" * 32)
+
+    def boom(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        raise AssertionError("開いてはいけない")
+
+    monkeypatch.setattr(app, "WakeServer", boom)
+    monkeypatch.setattr(app, "run_cycle", lambda *a, **k: CycleResult())
+    assert app.main(["--once"]) == 0

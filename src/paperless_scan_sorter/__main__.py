@@ -19,16 +19,36 @@ from paperless_scan_sorter.originals import OriginalsStore
 from paperless_scan_sorter.page_processor import PageCycleResult, run_page_cycle
 from paperless_scan_sorter.paperless import PaperlessClient
 from paperless_scan_sorter.processor import CycleResult, run_cycle
+from paperless_scan_sorter.wake import WakeServer
 
 logger = logging.getLogger(__name__)
 
-# 停止要求。待機中なら wait が即座に返り、処理中ならその周期の終わりで止まる。
+# 停止要求。処理中ならその周期の終わりで止まる。
 _stop = threading.Event()
+# 待機を打ち切る合図。停止要求と Webhook の両方が立てる。周期の途中で立てば、
+# 周期が終わった直後にもう 1 周期回す（その間に取り込まれた書類を拾うため）。
+_wake = threading.Event()
+
+# Webhook の受け口はコンテナの中のネットワークで待ち受ける。ホストには公開しない。
+WEBHOOK_HOST = "0.0.0.0"  # noqa: S104 - Compose の内部ネットワークからの要求を受けるため
 
 
 def request_stop() -> None:
     """ループに停止を要求する。"""
     _stop.set()
+    _wake.set()
+
+
+def request_wake() -> None:
+    """待機を打ち切り、すぐに次の周期を回させる。"""
+    _wake.set()
+
+
+def _wait(timeout: float) -> bool:
+    """次の周期まで待つ。停止を要求されていれば True。"""
+    _wake.wait(timeout)
+    _wake.clear()
+    return _stop.is_set()
 
 
 def _on_signal(signum: int, frame: FrameType | None) -> None:
@@ -52,6 +72,9 @@ def _page_summary(r: PageCycleResult) -> str:
 def main(argv: Sequence[str] | None = None) -> int:
     """設定を読み、`--once` なら 1 周期、そうでなければ停止要求まで周期を回す。
 
+    常駐するときは INTERVAL 秒ごとに周期を回す。WEBHOOK_TOKEN があれば Webhook の受け口を
+    開き、受けたら待たずに次の周期を回す。
+
     1 周期ではページ整形を先に回し、直した書類をその回の分類で処理する。片方が
     想定外の例外で止まっても、もう片方は回す。
     """
@@ -70,6 +93,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     _stop.clear()
+    _wake.clear()
     if not args.once and threading.current_thread() is threading.main_thread():
         signal.signal(signal.SIGTERM, _on_signal)
         signal.signal(signal.SIGINT, _on_signal)
@@ -80,6 +104,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     originals = OriginalsStore(settings.state_dir / "originals")
     claude = ClaudeClient(model=settings.model, timeout=settings.claude_timeout, env=os.environ)
     paperless = PaperlessClient(settings.paperless_url, settings.paperless_token)
+    server = None
+    if not args.once and settings.webhook_token is not None:
+        server = WakeServer(
+            settings.webhook_token, _wake, host=WEBHOOK_HOST, port=settings.webhook_port
+        )
+        server.start()
     try:
         while True:
             failed = False
@@ -102,9 +132,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 failed = True
             if args.once:
                 return 1 if failed else 0
-            if _stop.wait(settings.interval):
+            if _wait(settings.interval):
                 return 0
     finally:
+        if server is not None:
+            server.close()
         paperless.close()
 
 

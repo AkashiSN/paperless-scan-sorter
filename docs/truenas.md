@@ -90,7 +90,8 @@ chown 1000:1000 <root>/classifier
 | `${USERMAP_UID}` / `${USERMAP_GID}` | 手順 3 の `<paperless-uid>` / `<paperless-gid>` |
 | `${PAPERLESS_TOKEN}` | いったん空の文字列 `""`。手順 7 で入れる |
 | `${CLAUDE_CODE_OAUTH_TOKEN}` | いったん空の文字列 `""`。手順 7 で入れる |
-| `${INTERVAL:-300}` など既定値つきのもの | そのまま既定値（`300`、`sonnet`、`300`）を書く |
+| `${WEBHOOK_TOKEN:-}` | いったん空の文字列 `""`。Webhook を使うなら手順 7 で入れる |
+| `${INTERVAL:-300}` など既定値つきのもの | そのまま既定値（`300`、`sonnet`、`600`）を書く |
 
 Paperless のイメージは配置例では `:latest` です。運用では版を固定します（例: `ghcr.io/paperless-ngx/paperless-ngx:2.x.y`）。ai-classifier のイメージ `ghcr.io/akashisn/paperless-scan-sorter:latest` は main の先頭を指すので、固定したいときは `:sha-1234567` のようにコミットのタグにします。
 
@@ -136,6 +137,8 @@ ai-classifier のログ（**Apps → paperless → Logs** で ai-classifier を�
 ```
 
 `aborted=True` が続くときや終了コードの意味は、[`setup.md`](setup.md) の「4. 1 周期だけ動かして確かめる」を見てください。
+
+取り込みの直後に処理を始めたいときは、`WEBHOOK_TOKEN` に 16 文字以上の合言葉を入れて保存し、Paperless に Webhook のワークフローを足します（[`setup.md`](setup.md) の「6. Webhook ですぐ起こす」）。
 
 ## 8. スキャナーを設定する
 
