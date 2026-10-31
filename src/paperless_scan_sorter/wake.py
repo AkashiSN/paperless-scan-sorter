@@ -24,6 +24,13 @@ DEFAULT_READ_TIMEOUT = 5.0
 DEFAULT_MAX_CONNECTIONS = 8
 
 
+class DualStackError(RuntimeError):
+    """IPv6 のソケットで IPv4 も受ける設定（IPV6_V6ONLY を外す）ができない。
+
+    OSError ではないので、IPv6 が使えないときの IPv4 への開き直しに紛れない。
+    """
+
+
 class _Server(ThreadingHTTPServer):
     """同時接続数を slots で制限し、終了時に処理中のハンドラを待つ HTTP サーバー。
 
@@ -47,8 +54,11 @@ class _Server(ThreadingHTTPServer):
         if self.address_family == socket.AF_INET6:
             # Docker のネットワークで IPv6 が有効だと、サービス名は IPv6 のアドレスに引かれ、
             # Paperless の Webhook はそのアドレスだけに接続する。IPv4 も同じソケットで受ける。
-            # 外せないときは IPv4 を受けられないので、例外のまま起動を失敗させる。
-            self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            # 外せないときは IPv4 を受けられないので、起動を失敗させる。
+            try:
+                self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+            except OSError as e:
+                raise DualStackError("IPv6 のソケットで IPv4 も受ける設定ができない") from e
         super().server_bind()
 
     def process_request(self, request: socket.socket, client_address: object) -> None:

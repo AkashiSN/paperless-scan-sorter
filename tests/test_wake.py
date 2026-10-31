@@ -12,7 +12,7 @@ from collections.abc import Iterator
 import httpx
 import pytest
 
-from paperless_scan_sorter.wake import MAX_BODY_BYTES, WakeServer
+from paperless_scan_sorter.wake import MAX_BODY_BYTES, DualStackError, WakeServer
 
 TOKEN = "w" * 32
 
@@ -292,6 +292,7 @@ def test_IPV6_V6ONLYを外せなければ開かない(monkeypatch: pytest.Monkey
         return real(self, level, option, value)
 
     monkeypatch.setattr(socket.socket, "setsockopt", setsockopt)
-    with pytest.raises(OSError) as e:
+    with pytest.raises(DualStackError) as e:
         WakeServer(TOKEN, threading.Event(), host="::", port=0)
-    assert e.value.errno == errno.ENOPROTOOPT
+    assert not isinstance(e.value, OSError)
+    assert isinstance(e.value.__cause__, OSError)
