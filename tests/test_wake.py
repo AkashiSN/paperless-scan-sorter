@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import logging
 import socket
 import threading
@@ -11,7 +12,7 @@ from collections.abc import Iterator
 import httpx
 import pytest
 
-from paperless_scan_sorter.wake import MAX_BODY_BYTES, WakeServer
+from paperless_scan_sorter.wake import MAX_BODY_BYTES, DualStackError, WakeServer
 
 TOKEN = "w" * 32
 
@@ -252,3 +253,46 @@ def test_期限のタイマーを開始できなくても接続枠を返し接�
         assert r.status_code == 204
     finally:
         srv.close()
+
+
+def _ipv6_available() -> bool:
+    try:
+        with socket.socket(socket.AF_INET6) as s:
+            s.bind(("::1", 0))
+    except OSError:
+        return False
+    return True
+
+
+needs_ipv6 = pytest.mark.skipif(not _ipv6_available(), reason="IPv6 が使えない")
+
+
+@needs_ipv6
+def test_コロンを含むホストではIPv6とIPv4の両方で受ける() -> None:
+    event = threading.Event()
+    srv = WakeServer(TOKEN, event, host="::", port=0)
+    srv.start()
+    try:
+        headers = {"Authorization": f"Bearer {TOKEN}"}
+        r6 = httpx.post(f"http://[::1]:{srv.port}/wake", headers=headers)
+        r4 = httpx.post(f"http://127.0.0.1:{srv.port}/wake", headers=headers)
+        assert (r6.status_code, r4.status_code) == (204, 204)
+        assert event.is_set()
+    finally:
+        srv.close()
+
+
+@needs_ipv6
+def test_IPV6_V6ONLYを外せなければ開かない(monkeypatch: pytest.MonkeyPatch) -> None:
+    real = socket.socket.setsockopt
+
+    def setsockopt(self, level, option, value):  # noqa: ANN001, ANN202
+        if level == socket.IPPROTO_IPV6 and option == socket.IPV6_V6ONLY:
+            raise OSError(errno.ENOPROTOOPT, "Protocol not available")
+        return real(self, level, option, value)
+
+    monkeypatch.setattr(socket.socket, "setsockopt", setsockopt)
+    with pytest.raises(DualStackError) as e:
+        WakeServer(TOKEN, threading.Event(), host="::", port=0)
+    assert not isinstance(e.value, OSError)
+    assert isinstance(e.value.__cause__, OSError)

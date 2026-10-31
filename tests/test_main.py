@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import errno
 import logging
+import socket
 from datetime import date
 from pathlib import Path
 
@@ -11,6 +13,7 @@ from paperless_scan_sorter.errors import MissingTagsError
 from paperless_scan_sorter.originals import OriginalsStore
 from paperless_scan_sorter.page_processor import PageCycleResult
 from paperless_scan_sorter.processor import CycleResult
+from paperless_scan_sorter.wake import DualStackError
 
 
 @pytest.fixture(autouse=True)
@@ -280,7 +283,7 @@ def test_WEBHOOK_TOKENがあれば受け口を開き終了時に閉じる(
     monkeypatch.setattr(app, "WakeServer", FakeServer)
     monkeypatch.setattr(app, "run_cycle", fake)
     assert app.main([]) == 0
-    assert events == ["init 0.0.0.0 0 True", "start", "close"]
+    assert events == ["init :: 0 True", "start", "close"]
 
 
 def test_onceでは受け口を開かない(monkeypatch: pytest.MonkeyPatch, env: None) -> None:
@@ -350,3 +353,87 @@ def test_受け口を閉じる例外が出てもPaperlessのクライアント�
     with pytest.raises(OSError):
         app.main([])
     assert closed == ["paperless"]
+
+
+def test_IPv6で受け口を開けなければIPv4だけで開く(
+    monkeypatch: pytest.MonkeyPatch, env: None
+) -> None:
+    monkeypatch.setenv("WEBHOOK_TOKEN", "w" * 32)
+    hosts: list[str] = []
+
+    class FakeServer:
+        def __init__(self, token, event, *, host, port):  # noqa: ANN001
+            hosts.append(host)
+            if host == "::":
+                raise OSError(errno.EAFNOSUPPORT, "Address family not supported by protocol")
+
+        def start(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    def fake(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        app.request_stop()
+        return CycleResult()
+
+    monkeypatch.setattr(app, "WakeServer", FakeServer)
+    monkeypatch.setattr(app, "run_cycle", fake)
+    assert app.main([]) == 0
+    assert hosts == [app.WEBHOOK_HOST, app.WEBHOOK_HOST_IPV4]
+    assert app.WEBHOOK_HOST == "::"
+
+
+@pytest.mark.parametrize("code", [errno.EADDRINUSE, errno.EACCES])
+def test_IPv6が使えないこと以外のエラーではIPv4で開き直さない(
+    monkeypatch: pytest.MonkeyPatch, env: None, code: int
+) -> None:
+    monkeypatch.setenv("WEBHOOK_TOKEN", "w" * 32)
+    hosts: list[str] = []
+
+    class FakeServer:
+        def __init__(self, token, event, *, host, port):  # noqa: ANN001
+            hosts.append(host)
+            raise OSError(code, "bind failed")
+
+    monkeypatch.setattr(app, "WakeServer", FakeServer)
+    with pytest.raises(OSError) as e:
+        app.main([])
+    assert e.value.errno == code
+    assert hosts == [app.WEBHOOK_HOST]
+
+
+def _ipv6_available() -> bool:
+    try:
+        with socket.socket(socket.AF_INET6) as s:
+            s.bind(("::1", 0))
+    except OSError:
+        return False
+    return True
+
+
+@pytest.mark.skipif(not _ipv6_available(), reason="IPv6 が使えない")
+@pytest.mark.parametrize("code", [errno.EPROTONOSUPPORT, errno.EAFNOSUPPORT, errno.ENOPROTOOPT])
+def test_IPV6_V6ONLYを外せなければIPv4で開き直さず起動を失敗させる(
+    monkeypatch: pytest.MonkeyPatch, env: None, code: int
+) -> None:
+    monkeypatch.setenv("WEBHOOK_TOKEN", "w" * 32)
+    monkeypatch.setenv("WEBHOOK_PORT", "0")
+    real = socket.socket.setsockopt
+    hosts: list[str] = []
+    real_server = app.WakeServer
+
+    def setsockopt(self, level, option, value):  # noqa: ANN001, ANN202
+        if level == socket.IPPROTO_IPV6 and option == socket.IPV6_V6ONLY:
+            raise OSError(code, "cannot clear IPV6_V6ONLY")
+        return real(self, level, option, value)
+
+    def spy(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        hosts.append(kwargs["host"])
+        return real_server(*args, **kwargs)
+
+    monkeypatch.setattr(socket.socket, "setsockopt", setsockopt)
+    monkeypatch.setattr(app, "WakeServer", spy)
+    with pytest.raises(DualStackError):
+        app.main([])
+    assert hosts == [app.WEBHOOK_HOST]

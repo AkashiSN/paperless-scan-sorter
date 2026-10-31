@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import errno
 import logging
 import os
 import signal
@@ -31,7 +32,12 @@ _stop = threading.Event()
 _wake = threading.Event()
 
 # Webhook の受け口はコンテナの中のネットワークで待ち受ける。ホストには公開しない。
-WEBHOOK_HOST = "0.0.0.0"  # noqa: S104 - Compose の内部ネットワークからの要求を受けるため
+# IPv6 と IPv4 の両方で受け、コンテナで IPv6 が使えなければ IPv4 だけで受ける。
+WEBHOOK_HOST = "::"
+WEBHOOK_HOST_IPV4 = "0.0.0.0"  # noqa: S104 - Compose の内部ネットワークからの要求を受けるため
+# IPv4 だけで開き直すのは、IPv6 そのものが使えないときだけ。ポートの使用中や権限の不足などを
+# 隠して IPv4 だけで動くと、IPv6 のアドレスに接続する Paperless の Webhook が届かない。
+_IPV6_UNAVAILABLE = frozenset({errno.EAFNOSUPPORT, errno.EPROTONOSUPPORT, errno.EADDRNOTAVAIL})
 
 
 def request_stop() -> None:
@@ -108,9 +114,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         paperless = PaperlessClient(settings.paperless_url, settings.paperless_token)
         cleanup.callback(paperless.close)
         if not args.once and settings.webhook_token is not None:
-            server = WakeServer(
-                settings.webhook_token, _wake, host=WEBHOOK_HOST, port=settings.webhook_port
-            )
+            try:
+                server = WakeServer(
+                    settings.webhook_token, _wake, host=WEBHOOK_HOST, port=settings.webhook_port
+                )
+            except OSError as e:
+                if e.errno not in _IPV6_UNAVAILABLE:
+                    raise
+                logger.warning("IPv6 が使えないので Webhook の受け口を IPv4 だけで開く: %s", e)
+                server = WakeServer(
+                    settings.webhook_token,
+                    _wake,
+                    host=WEBHOOK_HOST_IPV4,
+                    port=settings.webhook_port,
+                )
             cleanup.callback(server.close)
             server.start()
         while True:
