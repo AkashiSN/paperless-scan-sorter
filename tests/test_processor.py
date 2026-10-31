@@ -18,6 +18,7 @@ from paperless_scan_sorter.failures import CreatedStore, FailureStore
 from paperless_scan_sorter.paperless import Named, PaperlessClient
 from paperless_scan_sorter.pdfpages import PdfChunk
 from paperless_scan_sorter.processor import (
+    EXAMPLE_DOCS,
     MAX_PDF_BYTES,
     PAGES_PER_CHUNK,
     CycleResult,
@@ -60,6 +61,9 @@ class FakePaperless:
         self.patch_status: dict[int, int] = {}
         self.post_status: dict[str, int] = {}
         self.list_status: int | None = None
+        self.example_rows: list[dict] = []
+        self.example_status: int | None = None
+        self.example_params: list[dict[str, str]] = []
         self._next_id = 500
         self.tag_rows = [
             {"id": INBOX, "name": "inbox"},
@@ -83,6 +87,11 @@ class FakePaperless:
     def __call__(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
         method = request.method
+        if method == "GET" and path == "/api/documents/" and "ordering" in request.url.params:
+            self.example_params.append(dict(request.url.params))
+            if self.example_status:
+                return httpx.Response(self.example_status)
+            return self._page(self.example_rows)
         if method == "GET" and path == "/api/documents/":
             if self.list_status:
                 return httpx.Response(self.list_status)
@@ -811,3 +820,52 @@ def test_前の周期のCLIの失敗は持ち越さない(store: FailureStore, c
     r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
     assert r == CycleResult(retried=1)
     assert store.count(100) == 2
+
+
+def test_ai_doneの書類のタイトルを例としてプロンプトに入れる(
+    store: FailureStore, created: CreatedStore
+) -> None:
+    server = FakePaperless([_doc()])
+    server.example_rows = [
+        {"id": 7, "title": "取引報告書 2026年9月分", "correspondent": 10, "document_type": 20},
+        {"id": 8, "title": "メモ", "correspondent": None, "document_type": None},
+    ]
+    claude = FakeClaude(ok(_answer()))
+    run_cycle(server.client(), claude.client(), store, created, today=TODAY)
+    prompt = claude.calls[0]["argv"][-1]
+    assert "- ○○銀行 / 請求書: 取引報告書 2026年9月分\n" in prompt
+    assert "- （発行元なし） / （種類なし）: メモ\n" in prompt
+    assert server.example_params[0]["tags__id__all"] == str(AI_DONE)
+    assert server.example_params[0]["page_size"] == str(EXAMPLE_DOCS)
+
+
+def test_同じ周期で先に決めたタイトルも次の書類の例にする(
+    store: FailureStore, created: CreatedStore
+) -> None:
+    server = FakePaperless([_doc(100), _doc(101)])
+    claude = FakeClaude(ok(_answer(title="診療費 請求書兼領収証")), ok(_answer()))
+    run_cycle(server.client(), claude.client(), store, created, today=TODAY)
+    assert "診療費 請求書兼領収証" not in claude.calls[0]["argv"][-1]
+    assert "- ○○銀行 / 請求書: 診療費 請求書兼領収証\n" in claude.calls[1]["argv"][-1]
+
+
+def test_同じ周期で作った発行元も次の書類の候補と例に出る(
+    store: FailureStore, created: CreatedStore
+) -> None:
+    server = FakePaperless([_doc(100), _doc(101)])
+    claude = FakeClaude(ok(_answer(correspondent="△△病院", title="領収証")), ok(_answer()))
+    run_cycle(server.client(), claude.client(), store, created, today=TODAY)
+    second = claude.calls[1]["argv"][-1]
+    assert "\n- △△病院\n" in second
+    assert "- △△病院 / 請求書: 領収証\n" in second
+
+
+def test_タイトルの例を取れなければ周期を打ち切る(
+    store: FailureStore, created: CreatedStore
+) -> None:
+    server = FakePaperless([_doc()])
+    server.example_status = 503
+    claude = FakeClaude(ok(_answer()))
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
+    assert r == CycleResult(aborted=True)
+    assert claude.calls == []

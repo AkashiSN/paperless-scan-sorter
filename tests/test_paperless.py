@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from paperless_scan_sorter.errors import DocumentFailure, ServiceUnavailable
-from paperless_scan_sorter.paperless import Document, Named, PaperlessClient
+from paperless_scan_sorter.paperless import Document, Named, PaperlessClient, Titled
 
 BASE = "https://paperless.example.com"
 
@@ -353,3 +353,42 @@ def test_tagsの形が違う応答は打ち切り対象になる(body: object) -
     client = make_client(lambda request: httpx.Response(200, json=body))
     with pytest.raises(ServiceUnavailable):
         client.document_tags(7)
+
+
+def test_recent_titles_タグの付いた新しい書類のタイトルを1ページだけ取る() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "next": f"{BASE}/api/documents/?page=2",
+                "results": [
+                    {
+                        "id": 1,
+                        "title": "取引報告書 2026年9月分",
+                        "correspondent": 10,
+                        "document_type": 20,
+                    },
+                    {"id": 2, "title": "領収証", "correspondent": None, "document_type": None},
+                ],
+            },
+        )
+
+    out = make_client(handler).recent_titles(3, limit=50)
+    assert out == [Titled("取引報告書 2026年9月分", 10, 20), Titled("領収証", None, None)]
+    assert len(seen) == 1
+    params = seen[0].url.params
+    assert params["tags__id__all"] == "3"
+    assert params["ordering"] == "-added"
+    assert params["page_size"] == "50"
+    assert params["fields"] == "id,title,correspondent,document_type"
+
+
+def test_recent_titles_形が違えば利用不可() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"results": [{"id": 1}]})
+
+    with pytest.raises(ServiceUnavailable):
+        make_client(handler).recent_titles(3, limit=50)

@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Iterable
+from dataclasses import dataclass
 
 from paperless_scan_sorter.tags import STATE_TAGS
 
@@ -26,7 +28,7 @@ TRANSCRIBE_PROMPT = f"""\
 {_PAGES_RULE}
 """
 
-# `{…}` の 3 か所だけを 1 回の置換で埋める。JSON の `{}` を含むので str.format は使わない。
+# `{…}` の 4 か所だけを 1 回の置換で埋める。JSON の `{}` を含むので str.format は使わない。
 _TEMPLATE = (
     """\
 あなたはスキャンした書類を整理する分類器です。指定した PDF が書類です。
@@ -52,9 +54,9 @@ _TEMPLATE = (
     + """
 
 タイトルの付け方:
-- 銀行・証券: 書類名と対象期間（例: 取引報告書 2026年9月）
+- 下の「既存のタイトルの例」に同じ発行元・同じ種類の書類があれば、その書き方にそろえる（書類名の言い方、語順、表記）
+- 日付は入れない。書類の日付は created に入れる。ただし書類の日付と違う対象期間や年度があれば、西暦で入れる（例: 取引報告書 2026年9月分、住民税決定通知書 2026年度）
 - 保険: 書類名と証券番号の下 4 桁
-- 役所・税: 書類名と年度
 
 発行元の候補:
 {correspondents}
@@ -64,10 +66,63 @@ _TEMPLATE = (
 
 タグの候補:
 {tags}
+
+既存のタイトルの例（発行元 / 文書の種類: タイトル）:
+{examples}
 """
 )
 
-_PLACEHOLDER = re.compile(r"\{(correspondents|document_types|tags)\}")
+_PLACEHOLDER = re.compile(r"\{(correspondents|document_types|tags|examples)\}")
+
+# タイトルの例は、同じ発行元・種類ごとに EXAMPLES_PER_KIND 件、全体で EXAMPLES_MAX 件まで。
+EXAMPLES_PER_KIND = 2
+EXAMPLES_MAX = 60
+# 例の 1 項目（名前・タイトル）の長さの上限。
+_EXAMPLE_FIELD_MAX = 60
+# 例から除く文字の一般カテゴリ。改行などでプロンプトの行の構造が崩れないようにする。
+_EXAMPLE_REMOVED = frozenset({"Cf"})
+_EXAMPLE_TO_SPACE = frozenset({"Cc", "Zl", "Zp"})
+
+
+@dataclass(frozen=True)
+class TitleExample:
+    """既存の書類のタイトルの例。名前が無ければ None。"""
+
+    correspondent: str | None
+    document_type: str | None
+    title: str
+
+
+def _one_line(value: str) -> str:
+    """改行・制御文字を空白にし、書式文字を除き、空白を詰めて長さを切る。"""
+    chars = []
+    for ch in value:
+        category = unicodedata.category(ch)
+        if category in _EXAMPLE_TO_SPACE:
+            chars.append(" ")
+        elif category not in _EXAMPLE_REMOVED:
+            chars.append(ch)
+    return " ".join("".join(chars).split())[:_EXAMPLE_FIELD_MAX]
+
+
+def _format_examples(examples: Iterable[TitleExample]) -> str:
+    """例を渡された順（新しい順）に、発行元・種類ごとの件数と全体の件数を絞って並べる。"""
+    lines: list[str] = []
+    per_kind: dict[tuple[str, str], int] = {}
+    seen: set[str] = set()
+    for ex in examples:
+        title = _one_line(ex.title)
+        corr = _one_line(ex.correspondent or "") or "（発行元なし）"
+        kind = _one_line(ex.document_type or "") or "（種類なし）"
+        line = f"- {corr} / {kind}: {title}"
+        if not title or line in seen or per_kind.get((corr, kind), 0) >= EXAMPLES_PER_KIND:
+            continue
+        seen.add(line)
+        per_kind[(corr, kind)] = per_kind.get((corr, kind), 0) + 1
+        lines.append(line)
+        if len(lines) >= EXAMPLES_MAX:
+            break
+    return "\n".join(lines) if lines else "（なし）"
 
 
 def _format_names(names: Iterable[str]) -> str:
@@ -90,9 +145,11 @@ def build_prompt(
     correspondents: Iterable[str],
     document_types: Iterable[str],
     tags: Iterable[str],
+    examples: Iterable[TitleExample] = (),
 ) -> str:
-    """候補一覧を埋めたプロンプトを返す。状態管理用のタグは候補から除く。"""
+    """候補一覧とタイトルの例を埋めたプロンプトを返す。状態管理用のタグは候補から除く。"""
     values = {
+        "examples": _format_examples(examples),
         "correspondents": _format_names(correspondents),
         "document_types": _format_names(document_types),
         "tags": _format_names(t for t in tags if t not in STATE_TAGS),

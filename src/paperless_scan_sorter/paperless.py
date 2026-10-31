@@ -41,6 +41,15 @@ class Document:
 
 
 @dataclass(frozen=True)
+class Titled:
+    """タイトルの例に使う書類の項目。"""
+
+    title: str
+    correspondent: int | None
+    document_type: int | None
+
+
+@dataclass(frozen=True)
 class Named:
     """id と名前だけを持つ項目（タグ・correspondent・書類種別）。"""
 
@@ -87,6 +96,22 @@ class PaperlessClient:
                     tags=frozenset(r["tags"]),
                 )
                 for r in rows
+            ]
+
+    def recent_titles(self, tag_id: int, *, limit: int) -> list[Titled]:
+        """タグを持つ書類を新しい順に limit 件まで（1 ページだけ）返す。"""
+        path = "/api/documents/"
+        params = {
+            "tags__id__all": tag_id,
+            "ordering": "-added",
+            "page_size": limit,
+            "fields": "id,title,correspondent,document_type",
+        }
+        response = self._request("GET", path, params=params)
+        with _parsing("GET", path):
+            return [
+                Titled(r["title"], r["correspondent"], r["document_type"])
+                for r in response.json()["results"]
             ]
 
     def tags(self) -> list[Named]:
