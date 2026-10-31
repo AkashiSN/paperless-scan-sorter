@@ -51,7 +51,7 @@ TrueNAS 25.10 では、Generic のプリセットでも ACL の型は NFSv4 に�
 
 **Credentials → Users** で、次の 2 人を用意します。
 
-- **Paperless の実行ユーザー**（以下 `<paperless-uid>` / `<paperless-gid>`）: Paperless のコンテナがこの UID/GID で動きます（`USERMAP_UID` / `USERMAP_GID`）。アプリ用の組み込みユーザー `apps`（UID/GID 568）を使うのが簡単です。専用に作っても構いません
+- **Paperless の実行ユーザー**（以下、ユーザー名を `<paperless-user>`、その UID/GID を `<paperless-uid>` / `<paperless-gid>`）: Paperless のコンテナがこの UID/GID で動きます（`USERMAP_UID` / `USERMAP_GID`）。アプリ用の組み込みユーザー `apps`（UID/GID 568）を使うのが簡単です。専用に作っても構いません
 - **スキャナー用のユーザー**（以下 `<scanner-user>`）: SMB でだけ使う。SMB 以外のログインは要りません
 
 TrueNAS のシェル（**System → Shell**）で所有者を合わせます。
@@ -67,9 +67,9 @@ chown 1000:1000 <root>/classifier
 `consume` は ACL で権限を付けます（**Datasets → consume → Permissions → Edit**）。SMB のプリセットが付けた既定のエントリーは残し、次の 2 つを足します。どちらも Modify で、下のフォルダーに継承させます。
 
 - `<scanner-user>`: 書き込み（ファイルとフォルダーの作成）
-- `<paperless-uid>` のユーザー: 読み取りと削除（取り込んだ後にファイルを消すため）
+- `<paperless-user>`: 読み取りと削除（取り込んだ後にファイルを消すため）
 
-付けたら、`<scanner-user>` で作ったファイルを `<paperless-uid>` のユーザーで消せることを確かめます（`sudo -u <scanner-user> touch <root>/consume/.t && sudo -u <paperless-user> rm <root>/consume/.t`）。
+付けたら、`<scanner-user>` で作ったファイルを `<paperless-user>` で消せることを確かめます（`sudo -u <scanner-user> touch <root>/consume/.t && sudo -u <paperless-user> rm <root>/consume/.t`）。
 
 ## 4. SMB 共有を作る
 

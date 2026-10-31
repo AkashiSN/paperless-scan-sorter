@@ -33,6 +33,8 @@ services:
       - ${PAPERLESS_ROOT}/export:/usr/src/paperless/export
     environment:
       PAPERLESS_REDIS: redis://broker:6379
+      # DBHOST があれば PostgreSQL が選ばれるが、取り違えないよう明示する。
+      PAPERLESS_DBENGINE: postgresql
       PAPERLESS_DBHOST: db
       PAPERLESS_DBPASS: ${DB_PASSWORD}
       PAPERLESS_SECRET_KEY: ${PAPERLESS_SECRET_KEY}
@@ -48,8 +50,9 @@ services:
       PAPERLESS_FILENAME_FORMAT: '{% if correspondent and correspondent != "none" %}{{ correspondent }}{% else %}未分類{% endif %}/{{ created_year }}/{{ created }}_{{ title }}'
       # 通常のスキャン（scan/）と Claude に送らない書類（private/）をサブフォルダで分けるため。
       PAPERLESS_CONSUMER_RECURSIVE: "true"
-      # SMB 経由の書き込みは inotify で拾えない場合があるため、ポーリングする。
-      PAPERLESS_CONSUMER_POLLING: "60"
+      # 取り込み口は inotify で見張る。SMB のサーバーと同じホストのファイルシステムを
+      # マウントしていれば、SMB 経由の書き込みも数秒で拾える。別のホストからのマウントなどで
+      # 取りこぼすときは、PAPERLESS_CONSUMER_POLLING_INTERVAL（秒）でポーリングに切り替える。
       USERMAP_UID: ${USERMAP_UID}
       USERMAP_GID: ${USERMAP_GID}
 
