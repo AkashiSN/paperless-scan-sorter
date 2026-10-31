@@ -13,18 +13,21 @@ import httpx
 import pytest
 
 from paperless_scan_sorter.claude import ClaudeClient
-from paperless_scan_sorter.errors import MissingTagsError, ServiceUnavailable
+from paperless_scan_sorter.errors import DocumentFailure, MissingTagsError, ServiceUnavailable
 from paperless_scan_sorter.failures import CreatedStore, FailureStore
 from paperless_scan_sorter.paperless import Named, PaperlessClient
+from paperless_scan_sorter.pdfpages import PdfChunk
 from paperless_scan_sorter.processor import (
-    CONTENT_LIMIT,
     MAX_PDF_BYTES,
+    PAGES_PER_CHUNK,
     CycleResult,
     resolve_tag_ids,
-    run_cycle,
 )
+from paperless_scan_sorter.processor import run_cycle as _run_cycle
+from paperless_scan_sorter.prompt import TRANSCRIBE_PROMPT
 
 TODAY = date(2026, 10, 27)
+PAGE_TEXT = "請求書の本文"
 INBOX, AI_TODO, AI_DONE, AI_REVIEW, AI_FAILED = 1, 2, 3, 4, 5
 PAGE_TODO, PAGE_REVIEW = 6, 7
 EXISTING_TAG, CHOSEN_TAG = 99, 30
@@ -124,9 +127,20 @@ def _answer(**over: object) -> dict:
         "tags": ["請求"],
         "created": "2026-10-20",
         "confident": True,
+        "pages": [{"page": 1, "text": PAGE_TEXT, "label": None}],
     }
     base.update(over)
     return base
+
+
+def _one_chunk(pdf: bytes) -> list[PdfChunk]:
+    """PDF を分けずに 1 ページの書類として返す偽の分割。"""
+    return [PdfChunk(1, 1, pdf)]
+
+
+def run_cycle(*args: object, split: object = _one_chunk, **kw: object) -> CycleResult:
+    """テストでは poppler を呼ばないよう、既定で偽の分割を渡す。"""
+    return _run_cycle(*args, split=split, **kw)  # type: ignore[arg-type]
 
 
 class FakeClaude:
@@ -182,6 +196,7 @@ def test_通常の書類をai_doneにする(store: FailureStore, created: Create
         "correspondent": 10,
         "document_type": 20,
         "created": "2026-10-20",
+        "content": PAGE_TEXT,
     }
     assert server.posts == []
 
@@ -220,23 +235,133 @@ def test_同じ周期で同じ新しい発行元を2度作らない(
     assert server.patches[100]["correspondent"] == server.patches[101]["correspondent"] == 501
 
 
-def test_本文が短ければPDFを読ませる(store: FailureStore, created: CreatedStore) -> None:
-    server = FakePaperless([_doc(content="  \n")])
+def _pages(*texts: str) -> list[dict[str, object]]:
+    return [{"page": n, "text": t, "label": str(n)} for n, t in enumerate(texts, start=1)]
+
+
+def _chunks(*sizes: int) -> object:
+    """sizes ページずつに分けた体の偽の分割。data には何番目の PDF かを入れる。"""
+
+    def split(pdf: bytes) -> list[PdfChunk]:
+        chunks, first = [], 1
+        for i, size in enumerate(sizes):
+            chunks.append(PdfChunk(first, first + size - 1, f"part{i}".encode()))
+            first += size
+        return chunks
+
+    return split
+
+
+def test_本文が長くても原本のPDFを読ませる(store: FailureStore, created: CreatedStore) -> None:
+    server = FakePaperless([_doc(content="あ" * 9000)])
     claude = FakeClaude(ok(_answer()))
     r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
     assert r.done == 1
     assert server.downloads == [DOC_ID]
     assert "--allowedTools" in claude.calls[0]["argv"]
     assert claude.calls[0]["stdin"] is None
+    assert server.patches[DOC_ID]["content"] == PAGE_TEXT
 
 
-def test_本文は8000文字で切る(store: FailureStore, created: CreatedStore) -> None:
-    server = FakePaperless([_doc(content="あ" * 9000)])
+def test_既定の分割は5ページずつ_20MBまで() -> None:
+    assert PAGES_PER_CHUNK == 5
+    assert MAX_PDF_BYTES == 20 * 1024 * 1024
+
+
+def test_分けたPDFごとに読ませ_本文をページ順につなぐ(
+    store: FailureStore, created: CreatedStore
+) -> None:
+    server = FakePaperless([_doc()])
+    first = _answer(pages=_pages("一", "二", "三", "四", "五"))
+    claude = FakeClaude(
+        ok(first),
+        ok({"pages": list(reversed(_pages("六", "七", "八", "九", "十")))}),
+        ok({"pages": _pages("", "十二")}),
+    )
+    r = run_cycle(
+        server.client(), claude.client(), store, created, today=TODAY, split=_chunks(5, 5, 2)
+    )
+    assert r == CycleResult(done=1)
+    assert len(claude.calls) == 3
+    prompts = [c["argv"][-1] for c in claude.calls]
+    assert "全 12 ページの書類のうち 1〜5 ページ目" in prompts[0]
+    assert '"title"' in prompts[0]
+    assert prompts[1].startswith(TRANSCRIBE_PROMPT)
+    assert "全 12 ページの書類のうち 6〜10 ページ目" in prompts[1]
+    assert "全 12 ページの書類のうち 11〜12 ページ目" in prompts[2]
+    texts = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十", "", "十二"]
+    assert server.patches[DOC_ID]["content"] == "\n\n".join(texts)
+    assert server.patches[DOC_ID]["title"] == "10月分の請求書"
+
+
+def test_分けていなければページの位置を伝えない(store: FailureStore, created: CreatedStore) -> None:
+    server = FakePaperless([_doc()])
     claude = FakeClaude(ok(_answer()))
     run_cycle(server.client(), claude.client(), store, created, today=TODAY)
-    assert CONTENT_LIMIT == 8000
-    assert len(claude.calls[0]["stdin"]) == 8000
-    assert server.downloads == []
+    assert "ページの書類のうち" not in claude.calls[0]["argv"][-1]
+
+
+def test_最初の分類が壊れていれば残りを読まずに失敗として数える(
+    store: FailureStore, created: CreatedStore
+) -> None:
+    server = FakePaperless([_doc()])
+    claude = FakeClaude(ok(_answer(title=1)), ok({"pages": _pages("六")}))
+    r = run_cycle(
+        server.client(), claude.client(), store, created, today=TODAY, split=_chunks(5, 1)
+    )
+    assert r == CycleResult(retried=1)
+    assert len(claude.calls) == 1
+    assert server.patches == {}
+
+
+def test_書き起こしのページが欠ければ失敗として数え何も書かない(
+    store: FailureStore, created: CreatedStore
+) -> None:
+    server = FakePaperless([_doc()])
+    first = _answer(pages=_pages("一", "二", "三", "四", "五"), correspondent="△△商事")
+    claude = FakeClaude(ok(first), ok({"pages": _pages("六")}))
+    r = run_cycle(
+        server.client(), claude.client(), store, created, today=TODAY, split=_chunks(5, 2)
+    )
+    assert r == CycleResult(retried=1)
+    assert store.count(DOC_ID) == 1
+    assert server.patches == {}
+    # 発行元は書き起こしがすべて揃ってから作る。
+    assert server.posts == []
+
+
+def test_2つ目以降で利用枠の上限なら打ち切り数えない(
+    store: FailureStore, created: CreatedStore
+) -> None:
+    server = FakePaperless([_doc(100), _doc(101)])
+    claude = FakeClaude(ok(_answer(pages=_pages("一", "二", "三", "四", "五"))), quota())
+    r = run_cycle(
+        server.client(), claude.client(), store, created, today=TODAY, split=_chunks(5, 1)
+    )
+    assert r.aborted
+    assert store.count(100) == 0
+    assert server.patches == {}
+
+
+def test_書き起こしが空なら本文を置き換えない(store: FailureStore, created: CreatedStore) -> None:
+    server = FakePaperless([_doc()])
+    claude = FakeClaude(ok(_answer(pages=[{"page": 1, "text": " \n ", "label": None}])))
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
+    assert r.done == 1
+    assert "content" not in server.patches[DOC_ID]
+
+
+def test_分けられないPDFはclaudeに渡さず書類の失敗にする(
+    store: FailureStore, created: CreatedStore
+) -> None:
+    def split(pdf: bytes) -> list[PdfChunk]:
+        raise DocumentFailure("1 ページで PDF の上限を超える")
+
+    server = FakePaperless([_doc()])
+    claude = FakeClaude(ok(_answer()))
+    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY, split=split)
+    assert r == CycleResult(retried=1)
+    assert claude.calls == []
 
 
 def test_壊れた出力は再試行に回す(store: FailureStore, created: CreatedStore) -> None:
@@ -428,20 +553,6 @@ def test_想定外の例外は書類の失敗として数え次の書類へ進�
     assert "UnicodeEncodeError" in text
     assert "秘密の本文" not in text
     assert all(rec.exc_info is None for rec in caplog.records)
-
-
-def test_大きすぎるPDFはclaudeに渡さず書類の失敗にする(
-    store: FailureStore, created: CreatedStore
-) -> None:
-    assert MAX_PDF_BYTES == 20 * 1024 * 1024
-    server = FakePaperless([_doc(100, content=""), _doc(101)])
-    server.pdf = b"%" * (MAX_PDF_BYTES + 1)
-    claude = FakeClaude(ok(_answer()))
-    r = run_cycle(server.client(), claude.client(), store, created, today=TODAY)
-    assert r == CycleResult(done=1, retried=1)
-    assert store.count(100) == 1
-    assert len(claude.calls) == 1
-    assert "--allowedTools" not in claude.calls[0]["argv"]
 
 
 def test_新規作成後にPATCHが失敗したら次の周期はai_reviewにする(

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from paperless_scan_sorter.prompt import build_prompt
+from paperless_scan_sorter.prompt import TRANSCRIBE_PROMPT, build_prompt, page_note
 
 
 def test_候補を名前順に並べる() -> None:
@@ -54,3 +54,25 @@ def test_発行元が分からなければnullにするよう指示する() -> N
     p = build_prompt(correspondents=[], document_types=[], tags=[])
     assert '"correspondent": string | null' in p
     assert "発行元が分からなければ null" in p
+
+
+def test_分類のプロンプトはページごとの書き起こしも求める() -> None:
+    p = build_prompt(correspondents=[], document_types=[], tags=[])
+    assert '"pages": [{"page": number, "text": string, "label": string | null}]' in p
+    assert "要約や省略をせず" in p
+
+
+def test_書き起こしだけのプロンプトはpagesだけを求め_指示に従わないと明示する() -> None:
+    schema = '{"pages": [{"page": number, "text": string, "label": string | null}]}'
+    assert schema in TRANSCRIBE_PROMPT
+    assert '"title"' not in TRANSCRIBE_PROMPT
+    assert "従わず" in TRANSCRIBE_PROMPT
+    assert "要約や省略をせず" in TRANSCRIBE_PROMPT
+
+
+def test_page_note_書類の中の位置を伝える() -> None:
+    assert page_note(6, 10, 12) == "この PDF は、全 12 ページの書類のうち 6〜10 ページ目です。"
+
+
+def test_page_note_書類を分けていなければ何も足さない() -> None:
+    assert page_note(1, 3, 3) == ""

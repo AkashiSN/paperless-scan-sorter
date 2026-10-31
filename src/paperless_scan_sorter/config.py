@@ -13,7 +13,7 @@ from pathlib import Path
 DEFAULT_INTERVAL = 300
 DEFAULT_STATE_DIR = "/state"
 DEFAULT_MODEL = "sonnet"
-DEFAULT_CLAUDE_TIMEOUT = 300.0
+DEFAULT_CLAUDE_TIMEOUT = 600.0
 
 
 @dataclass(frozen=True)

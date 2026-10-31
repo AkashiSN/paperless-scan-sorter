@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
 
@@ -17,19 +17,31 @@ from paperless_scan_sorter.errors import (
 )
 from paperless_scan_sorter.failures import CreatedStore, FailureStore
 from paperless_scan_sorter.paperless import Document, Named, PaperlessClient
-from paperless_scan_sorter.prompt import build_prompt
+from paperless_scan_sorter.pdfpages import PdfChunk, split_pdf
+from paperless_scan_sorter.prompt import TRANSCRIBE_PROMPT, build_prompt, page_note
 from paperless_scan_sorter.tags import REQUIRED_TAGS
-from paperless_scan_sorter.validate import parse_classification
+from paperless_scan_sorter.validate import (
+    Classification,
+    parse_classification,
+    parse_pages,
+)
 
 logger = logging.getLogger(__name__)
 
 MAX_FAILURES = 3
-CONTENT_LIMIT = 8000
 # 前回の試行で発行元・文書タイプを作った書類を確認待ちにするときの理由。
 CREATED_BEFORE_REASON = "前回の試行で発行元・文書タイプを新規作成"
-MIN_TEXT_CHARS = 100
-# claude に読ませる PDF の上限。これを超える書類は読ませずに書類の失敗にする（D-008）。
+# claude に 1 回で読ませる PDF の上限。書き起こしが出力の上限で切れないようページ数を抑え、
+# 大きさはこれを超えないように分ける（D-008, D-020）。
+PAGES_PER_CHUNK = 5
 MAX_PDF_BYTES = 20 * 1024 * 1024
+
+# 原本の PDF を、claude に 1 回で読ませる大きさに分ける関数。
+type Splitter = Callable[[bytes], list[PdfChunk]]
+
+
+def _split(pdf: bytes) -> list[PdfChunk]:
+    return split_pdf(pdf, pages_per_chunk=PAGES_PER_CHUNK, max_bytes=MAX_PDF_BYTES)
 
 
 @dataclass
@@ -67,6 +79,7 @@ def run_cycle(
     created: CreatedStore,
     *,
     today: date,
+    split: Splitter = _split,
 ) -> CycleResult:
     """ai-todo の書類を全件取得してから 1 件ずつ処理する。"""
     result = CycleResult()
@@ -105,10 +118,11 @@ def run_cycle(
                 return result
             continue
         try:
-            decision = _classify(
+            decision, content = _classify(
                 doc,
                 paperless,
                 claude,
+                split,
                 prompt,
                 correspondents,
                 document_types,
@@ -118,6 +132,9 @@ def run_cycle(
                 created,
             )
             fields = _fields(decision)
+            # 書き起こしが空なら、Paperless の OCR の本文を残す。
+            if content.strip():
+                fields["content"] = content
             paperless.patch_document(doc.id, fields)
         except ServiceUnavailable as e:
             logger.error("書類 %d の処理中に利用不可となり周期を打ち切る: %s", doc.id, e)
@@ -166,10 +183,43 @@ def run_cycle(
     return result
 
 
+def _read(
+    doc: Document,
+    paperless: PaperlessClient,
+    claude: ClaudeClient,
+    split: Splitter,
+    prompt: str,
+    known_tags: dict[str, int],
+    today: date,
+) -> tuple[Classification, str]:
+    """原本の PDF を分けて claude に読ませ、分類と本文の書き起こしを返す。
+
+    分類は最初の PDF で決め、2 つ目以降は書き起こしだけを求める。書き起こしは
+    すべての PDF を読み終えてからページ順につなぐので、途中で失敗すれば何も返らない。
+    """
+    chunks = split(paperless.download_original(doc.id))
+    total = chunks[-1].last
+    if len(chunks) > 1:
+        logger.info("書類 %d: %d ページを %d 回に分けて読む", doc.id, total, len(chunks))
+
+    def ask(base: str, chunk: PdfChunk) -> str:
+        note = page_note(chunk.first, chunk.last, total)
+        return claude.read_pdf(f"{base}\n{note}" if note else base, chunk.data)
+
+    first, *rest = chunks
+    text = ask(prompt, first)
+    classification = parse_classification(text, known_tags=known_tags.keys(), today=today)
+    pages = list(parse_pages(text, expected=first.pages))
+    for chunk in rest:
+        pages.extend(parse_pages(ask(TRANSCRIBE_PROMPT, chunk), expected=chunk.pages))
+    return classification, "\n\n".join(p.text for p in pages)
+
+
 def _classify(
     doc: Document,
     paperless: PaperlessClient,
     claude: ClaudeClient,
+    split: Splitter,
     prompt: str,
     correspondents: list[Named],
     document_types: list[Named],
@@ -177,16 +227,10 @@ def _classify(
     ids: TagIds,
     today: date,
     created: CreatedStore,
-) -> Decision:
-    """書類を判定し、新規の発行元・文書タイプを作って ID に置き換えた Decision を返す。"""
-    if sum(1 for ch in doc.content if not ch.isspace()) < MIN_TEXT_CHARS:
-        pdf = paperless.download_original(doc.id)
-        if len(pdf) > MAX_PDF_BYTES:
-            raise DocumentFailure(f"PDF が大きすぎる ({len(pdf)} bytes)")
-        text = claude.classify_pdf(prompt, pdf)
-    else:
-        text = claude.classify_text(prompt, doc.content[:CONTENT_LIMIT])
-    classification = parse_classification(text, known_tags=tag_names.keys(), today=today)
+) -> tuple[Decision, str]:
+    """書類を判定し、新規の発行元・文書タイプを作って ID に置き換えた Decision と、
+    本文の書き起こしを返す。"""
+    classification, content = _read(doc, paperless, claude, split, prompt, tag_names, today)
     # 前回作った名前は今回は既存として見えるので、記録から確認待ちに回す（D-009）。
     extra = (CREATED_BEFORE_REASON,) if created.contains(doc.id) else ()
     decision = decide(
@@ -222,7 +266,7 @@ def _classify(
         tags=decision.tags,
         review=decision.review,
         reasons=decision.reasons,
-    )
+    ), content
 
 
 def _fields(decision: Decision) -> dict[str, object]:

@@ -20,7 +20,7 @@ def test_既定値() -> None:
         300,
         Path("/state"),
         "sonnet",
-        300.0,
+        600.0,
     )
 
 
