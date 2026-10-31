@@ -18,14 +18,14 @@ logger = logging.getLogger(__name__)
 # claude が使わないうえ、書類の本文に誘導されて漏れる経路を残さないため。
 _DROPPED_ENV = frozenset({"ANTHROPIC_API_KEY", "PAPERLESS_TOKEN", "PAPERLESS_TOKEN_FILE"})
 
-# 両経路に共通する引数。
+# 起動のたびに付ける引数。
 # - --no-session-persistence: 本文・PDF の読み取り結果・応答を ~/.claude の履歴に残さない
 # - dontAsk: 事前に許可していない操作は確認せずに拒否する
 # - --setting-sources "": ユーザー・プロジェクト・ローカルの設定ファイルを読まない
 # - --strict-mcp-config: --mcp-config を渡さないので、MCP サーバーを 1 つも使わない
 # - --restricted: ファイル系ツールを作業ディレクトリ内に閉じ、bypassPermissions を拒む
 # 後ろ 4 つは書類からの指示で許可外のツールが動かないようにするためのもの。
-# 使えるツールの集合そのものは各経路の --tools で決める（--allowedTools は許可ルールで、
+# 使えるツールの集合そのものは --tools で決める（--allowedTools は許可ルールで、
 # 集合を狭めない）。
 _LOCKDOWN_ARGS = (
     "--no-session-persistence", "--permission-mode", "dontAsk",
@@ -68,13 +68,13 @@ def run_subprocess(
 
 
 class ClaudeClient:
-    """`claude -p` を呼び、分類結果の文字列を返す。"""
+    """`claude -p` に PDF を読ませ、応答の文字列を返す。"""
 
     def __init__(
         self,
         *,
         model: str,
-        timeout: float = 300.0,
+        timeout: float = 600.0,
         executable: str = "claude",
         runner: Runner = run_subprocess,
         env: Mapping[str, str] | None = None,
@@ -86,19 +86,8 @@ class ClaudeClient:
         source = os.environ if env is None else env
         self._env = {k: v for k, v in source.items() if k not in _DROPPED_ENV}
 
-    def classify_text(self, prompt: str, content: str) -> str:
-        """本文を stdin で渡す。ツールは 1 つも使わせない。"""
-        with tempfile.TemporaryDirectory() as tmp:
-            # --tools は可変長の引数なので、プロンプトは `--` の後に置いて飲まれないようにする。
-            argv = [
-                self._executable, "-p", "--model", self._model,
-                "--max-turns", "1", "--output-format", "json", *_LOCKDOWN_ARGS,
-                "--tools", "", "--", prompt,
-            ]  # fmt: skip
-            return self._run(argv, content, Path(tmp))
-
-    def classify_pdf(self, prompt: str, pdf: bytes) -> str:
-        """PDF を一時ディレクトリへ置き、そのファイルだけ読ませる。"""
+    def read_pdf(self, prompt: str, pdf: bytes) -> str:
+        """PDF を一時ディレクトリへ置き、そのファイルだけ読ませて応答の result を返す。"""
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp).resolve() / "doc.pdf"
             path.write_bytes(pdf)

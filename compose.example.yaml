@@ -81,6 +81,6 @@ services:
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN}
       INTERVAL: ${INTERVAL:-300}
       CLAUDE_MODEL: ${CLAUDE_MODEL:-sonnet}
-      CLAUDE_TIMEOUT: ${CLAUDE_TIMEOUT:-300}
+      CLAUDE_TIMEOUT: ${CLAUDE_TIMEOUT:-600}
       # created の未来日判定に使う「今日」を Paperless と同じタイムゾーンにする。
       TZ: ${TZ}

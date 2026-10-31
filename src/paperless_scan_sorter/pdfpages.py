@@ -1,7 +1,7 @@
-"""PDF から、ページごとの画像・テキスト・向きの測定値を取り出す。
+"""PDF からページごとの画像・テキスト・向きの測定値を取り出し、PDF をページの範囲ごとに分ける。
 
-poppler（`pdfinfo` `pdftoppm` `pdftotext`）と tesseract を引数配列で起動する。判定は
-行わず、測定値を `PageInfo` にして返すだけ（判定は `pageplan`）。
+poppler（`pdfinfo` `pdftoppm` `pdftotext` `pdfseparate` `pdfunite`）と tesseract を引数配列で
+起動する。判定は行わず、測定値を `PageInfo` にして返すだけ（判定は `pageplan`）。
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ import re
 import subprocess
 import tempfile
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from PIL import Image
@@ -60,6 +61,72 @@ def page_count(pdf: bytes, *, runner: Runner = run_subprocess) -> int:
         if proc.returncode != 0:
             raise DocumentFailure("pdfinfo が PDF を読めなかった")
         return _pages_in(proc.stdout.decode("utf-8", "replace"))
+
+
+@dataclass(frozen=True)
+class PdfChunk:
+    """元の PDF の first〜last ページ（1 から数え、両端を含む）だけを持つ PDF。"""
+
+    first: int
+    last: int
+    data: bytes
+
+    @property
+    def pages(self) -> int:
+        return self.last - self.first + 1
+
+
+def split_pdf(
+    pdf: bytes, *, pages_per_chunk: int, max_bytes: int, runner: Runner = run_subprocess
+) -> list[PdfChunk]:
+    """PDF を pages_per_chunk ページずつ、それぞれ max_bytes 以下の PDF に分ける。
+
+    全体がどちらの上限にも収まれば、元の PDF をそのまま 1 つで返す。大きさの上限を超える
+    範囲は半分に分け直す。1 ページだけで上限を超えるときや、読めないときは書類起因の失敗。
+    分けた PDF は読ませるための一時的な写しで、元の PDF には触れない。
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        cwd = Path(tmp)
+        (cwd / "doc.pdf").write_bytes(pdf)
+        info = _run(runner, ["pdfinfo", "doc.pdf"], cwd)
+        if info.returncode != 0:
+            raise DocumentFailure("pdfinfo が PDF を読めなかった")
+        pages = _pages_in(info.stdout.decode("utf-8", "replace"))
+        if pages < 1:
+            raise DocumentFailure("PDF にページが無い")
+        if pages <= pages_per_chunk and len(pdf) <= max_bytes:
+            return [PdfChunk(1, pages, pdf)]
+
+        proc = _run(runner, ["pdfseparate", "doc.pdf", "page-%d.pdf"], cwd)
+        if proc.returncode != 0:
+            raise DocumentFailure("pdfseparate が PDF を分けられなかった")
+        if any(not (cwd / f"page-{n}.pdf").is_file() for n in range(1, pages + 1)):
+            raise DocumentFailure("分けたページの数がページ数と合わない")
+
+        chunks: list[PdfChunk] = []
+
+        def add(first: int, last: int) -> None:
+            if first == last:
+                data = (cwd / f"page-{first}.pdf").read_bytes()
+            else:
+                name = f"chunk-{first}-{last}.pdf"
+                parts = [f"page-{n}.pdf" for n in range(first, last + 1)]
+                united = _run(runner, ["pdfunite", *parts, name], cwd)
+                if united.returncode != 0:
+                    raise DocumentFailure("pdfunite がページをつなげなかった")
+                data = (cwd / name).read_bytes()
+            if len(data) <= max_bytes:
+                chunks.append(PdfChunk(first, last, data))
+            elif first == last:
+                raise DocumentFailure(f"1 ページで PDF の上限を超える ({len(data)} bytes)")
+            else:
+                middle = (first + last) // 2
+                add(first, middle)
+                add(middle + 1, last)
+
+        for start in range(1, pages + 1, pages_per_chunk):
+            add(start, min(start + pages_per_chunk - 1, pages))
+        return chunks
 
 
 def ink_ratio(image: Image.Image) -> float:

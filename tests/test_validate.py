@@ -6,7 +6,15 @@ from datetime import date
 import pytest
 
 from paperless_scan_sorter.errors import DocumentFailure
-from paperless_scan_sorter.validate import Classification, parse_classification, sanitize_component
+from paperless_scan_sorter.validate import (
+    PAGE_LABEL_MAX,
+    PAGE_TEXT_MAX,
+    Classification,
+    PageText,
+    parse_classification,
+    parse_pages,
+    sanitize_component,
+)
 
 TODAY = date(2026, 10, 27)
 KNOWN = {"請求書", "保険", "銀行", "税"}
@@ -167,3 +175,79 @@ def test_書式文字と行区切りも除く(ch: str) -> None:
     )
     assert c.correspondent == "Foo"
     assert c.document_type == "請求書"
+
+
+def _pages(*rows: object) -> str:
+    return json.dumps({"pages": list(rows)}, ensure_ascii=False)
+
+
+def _row(page: object = 1, text: object = "本文", label: object = None) -> dict[str, object]:
+    return {"page": page, "text": text, "label": label}
+
+
+def test_parse_pages_ページ順に並べて返す() -> None:
+    out = parse_pages(_pages(_row(2, "二", "2"), _row(1, "一", "1")), expected=2)
+    assert out == (PageText(1, "一", "1"), PageText(2, "二", "2"))
+
+
+def test_parse_pages_分類のJSONと同じ出力からも読める() -> None:
+    text = json.dumps(json.loads(_j()) | {"pages": [_row()]}, ensure_ascii=False)
+    assert parse_pages(text, expected=1) == (PageText(1, "本文", None),)
+
+
+def test_parse_pages_改行とタブは残し_ほかの制御文字と書式文字は除く() -> None:
+    raw = "一行目\r\n二行目\t列\x00\u200b\u2028終わり"
+    (page,) = parse_pages(_pages(_row(text=raw)), expected=1)
+    assert page.text == "一行目\n二行目\t列終わり"
+
+
+def test_parse_pages_長い本文とラベルは切り詰める() -> None:
+    (page,) = parse_pages(_pages(_row(text="あ" * (PAGE_TEXT_MAX + 5), label="1" * 50)), expected=1)
+    assert len(page.text) == PAGE_TEXT_MAX
+    assert page.label == "1" * PAGE_LABEL_MAX
+
+
+def test_parse_pages_空のラベルはNone_空の本文は空文字列() -> None:
+    (page,) = parse_pages(_pages(_row(text="", label=" \u200b ")), expected=1)
+    assert page == PageText(1, "", None)
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [],
+        [_row(1)],
+        [_row(1), _row(1)],
+        [_row(1), _row(3)],
+        [_row(1), _row(2), _row(3)],
+        [_row(0), _row(1)],
+    ],
+)
+def test_parse_pages_ページが過不足なく揃わなければ書類起因の失敗(rows: list[object]) -> None:
+    with pytest.raises(DocumentFailure):
+        parse_pages(_pages(*rows), expected=2)
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        _row(page="1"),
+        _row(page=True),
+        _row(page=1.0),
+        _row(text=None),
+        _row(text=1),
+        _row(label=2),
+        {"page": 1, "text": "本文"},
+        {"page": 1, "label": None},
+        "本文",
+    ],
+)
+def test_parse_pages_型が違えば書類起因の失敗(row: object) -> None:
+    with pytest.raises(DocumentFailure):
+        parse_pages(_pages(row), expected=1)
+
+
+@pytest.mark.parametrize("text", ["", "{壊れている", _j(), json.dumps({"pages": "本文"})])
+def test_parse_pages_pagesが無いか配列でなければ書類起因の失敗(text: str) -> None:
+    with pytest.raises(DocumentFailure):
+        parse_pages(text, expected=1)

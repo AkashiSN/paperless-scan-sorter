@@ -18,6 +18,7 @@ from paperless_scan_sorter.pdfpages import (
     ink_ratio,
     page_count,
     parse_osd,
+    split_pdf,
 )
 
 
@@ -231,9 +232,120 @@ def test_OSDを省くしきい値を渡せる() -> None:
     assert sum(c[0] == "tesseract" for c in calls) == 2
 
 
+def _split_runner(pages: int, page_bytes: dict[int, int], calls: list[list[str]]) -> Runner:
+    """pdfseparate は 1 ページずつ、pdfunite はつないだ大きさのファイルを作る偽の runner。
+
+    ページ n のファイルの大きさは page_bytes[n]（無ければ 10 バイト）。
+    """
+
+    def size(n: int) -> int:
+        return page_bytes.get(n, 10)
+
+    def runner(argv, cwd):  # noqa: ANN001, ANN202
+        calls.append(list(argv))
+        if argv[0] == "pdfinfo":
+            return _ok(f"Pages:          {pages}\n".encode())
+        if argv[0] == "pdfseparate":
+            for n in range(1, pages + 1):
+                (Path(cwd) / (argv[-1] % n)).write_bytes(b"p" * size(n))
+            return _ok()
+        if argv[0] == "pdfunite":
+            total = sum(len((Path(cwd) / name).read_bytes()) for name in argv[1:-1])
+            (Path(cwd) / argv[-1]).write_bytes(b"u" * total)
+            return _ok()
+        return _ok(returncode=1)
+
+    return runner
+
+
+def test_split_pdf_上限以下の小さい書類は分けずにそのまま返す() -> None:
+    calls: list[list[str]] = []
+    chunks = split_pdf(
+        b"orig", pages_per_chunk=5, max_bytes=100, runner=_split_runner(3, {}, calls)
+    )
+    assert [(c.first, c.last, c.data) for c in chunks] == [(1, 3, b"orig")]
+    assert [c[0] for c in calls] == ["pdfinfo"]
+
+
+def test_split_pdf_ページ数で分ける() -> None:
+    calls: list[list[str]] = []
+    chunks = split_pdf(b"x", pages_per_chunk=5, max_bytes=1000, runner=_split_runner(12, {}, calls))
+    assert [(c.first, c.last) for c in chunks] == [(1, 5), (6, 10), (11, 12)]
+    assert [c.pages for c in chunks] == [5, 5, 2]
+    assert len(chunks[0].data) == 50
+    unite = [c for c in calls if c[0] == "pdfunite"]
+    assert unite[0][1:-1] == [f"page-{n}.pdf" for n in range(1, 6)]
+    assert all(isinstance(c, list) for c in calls)
+
+
+def test_split_pdf_1ページだけ残る分はpdfseparateの出力をそのまま使う() -> None:
+    calls: list[list[str]] = []
+    chunks = split_pdf(b"x", pages_per_chunk=5, max_bytes=1000, runner=_split_runner(6, {}, calls))
+    assert [(c.first, c.last) for c in chunks] == [(1, 5), (6, 6)]
+    assert chunks[1].data == b"p" * 10
+    assert sum(c[0] == "pdfunite" for c in calls) == 1
+
+
+def test_split_pdf_上限を超える分はページ数を減らして分け直す() -> None:
+    calls: list[list[str]] = []
+    runner = _split_runner(4, {1: 40, 2: 40, 3: 10, 4: 10}, calls)
+    chunks = split_pdf(b"x" * 101, pages_per_chunk=5, max_bytes=60, runner=runner)
+    assert [(c.first, c.last) for c in chunks] == [(1, 1), (2, 2), (3, 4)]
+    assert all(len(c.data) <= 60 for c in chunks)
+
+
+def test_split_pdf_小さい書類でも全体が上限を超えれば分ける() -> None:
+    calls: list[list[str]] = []
+    runner = _split_runner(2, {1: 30, 2: 30}, calls)
+    chunks = split_pdf(b"x" * 101, pages_per_chunk=5, max_bytes=50, runner=runner)
+    assert [(c.first, c.last) for c in chunks] == [(1, 1), (2, 2)]
+
+
+def test_split_pdf_1ページで上限を超えれば書類起因() -> None:
+    with pytest.raises(DocumentFailure, match="1 ページ"):
+        split_pdf(b"x" * 101, pages_per_chunk=5, max_bytes=50, runner=_split_runner(2, {1: 60}, []))
+
+
+def test_split_pdf_ページが無ければ書類起因() -> None:
+    with pytest.raises(DocumentFailure):
+        split_pdf(b"x", pages_per_chunk=5, max_bytes=50, runner=_split_runner(0, {}, []))
+
+
+def test_split_pdf_pdfseparateが失敗すれば書類起因() -> None:
+    def runner(argv, cwd):  # noqa: ANN001, ANN202
+        if argv[0] == "pdfinfo":
+            return _ok(b"Pages:          9\n")
+        return _ok(returncode=1)
+
+    with pytest.raises(DocumentFailure, match="pdfseparate"):
+        split_pdf(b"x", pages_per_chunk=5, max_bytes=1000, runner=runner)
+
+
+def test_split_pdf_pdfuniteが失敗すれば書類起因() -> None:
+    base = _split_runner(9, {}, [])
+
+    def runner(argv, cwd):  # noqa: ANN001, ANN202
+        if argv[0] == "pdfunite":
+            return _ok(returncode=1)
+        return base(argv, cwd)
+
+    with pytest.raises(DocumentFailure, match="pdfunite"):
+        split_pdf(b"x", pages_per_chunk=5, max_bytes=1000, runner=runner)
+
+
+def test_split_pdf_pdfseparateの出力が欠ければ書類起因() -> None:
+    def runner(argv, cwd):  # noqa: ANN001, ANN202
+        if argv[0] == "pdfinfo":
+            return _ok(b"Pages:          9\n")
+        return _ok()
+
+    with pytest.raises(DocumentFailure, match="ページ数と合わない"):
+        split_pdf(b"x", pages_per_chunk=5, max_bytes=1000, runner=runner)
+
+
 # --- 実物のコマンドを使うテスト ---
 
-_TOOLS = ("pdfinfo", "pdftoppm", "pdftotext", "tesseract")
+_TOOLS = ("pdfinfo", "pdftoppm", "pdftotext", "tesseract", "pdfseparate", "pdfunite")
 needs_tools = pytest.mark.skipif(
     any(shutil.which(t) is None for t in _TOOLS), reason="poppler / tesseract が無い"
 )
@@ -325,3 +437,12 @@ def test_実物_テキストはtext_pdfから取り画像は元のPDFから取�
     assert infos[0].ink_ratio > 0.003
     assert infos[1].ink_ratio <= 0.003
     assert [i.text for i in analyze_pdf(scan)] == ["", ""]
+
+
+@needs_tools
+def test_実物_split_pdfはページ順を保って分ける() -> None:
+    pdf = _text_pdf(*(f"page number {n}" for n in range(1, 8)))
+    chunks = split_pdf(pdf, pages_per_chunk=3, max_bytes=10 * 1024 * 1024)
+    assert [(c.first, c.last) for c in chunks] == [(1, 3), (4, 6), (7, 7)]
+    texts = [i.text for c in chunks for i in analyze_pdf(c.data)]
+    assert [f"page number {n}" in t for n, t in enumerate(texts, start=1)] == [True] * 7

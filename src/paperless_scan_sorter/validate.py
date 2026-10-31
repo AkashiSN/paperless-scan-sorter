@@ -18,11 +18,16 @@ from paperless_scan_sorter.tags import STATE_TAGS
 TITLE_MAX = 60
 CORRESPONDENT_MAX = 30
 TAGS_MAX = 3
+# 1 ページの書き起こしと、印字されたページ番号の長さの上限。超えた分は切り捨てる。
+PAGE_TEXT_MAX = 20000
+PAGE_LABEL_MAX = 20
 # created として採用する範囲。これ以前（同日を含む）は捨てる。
 _CREATED_YEARS_BACK = 30
 # 名前から除く Unicode の一般カテゴリ。制御文字（Cc）、ゼロ幅文字や双方向制御などの
 # 書式文字（Cf）、行区切り（Zl）、段落区切り（Zp）は見た目に出ず、名前を偽装できる。
 _REMOVED_CATEGORIES = frozenset({"Cc", "Cf", "Zl", "Zp"})
+# 書き起こしの本文では、改行とタブだけは制御文字でも残す。
+_KEPT_IN_TEXT = frozenset("\n\t")
 
 
 @dataclass(frozen=True)
@@ -45,6 +50,19 @@ class Classification:
     confident: bool
 
 
+@dataclass(frozen=True)
+class PageText:
+    """検証を通した 1 ページの書き起こし。
+
+    page は読ませた PDF の中でのページ番号（1 から）。label はページに印字された
+    ページ番号で、無ければ None。
+    """
+
+    page: int
+    text: str
+    label: str | None
+
+
 def _strip_edges(value: str) -> str:
     """前後の空白とピリオドを削る。"""
     start, end = 0, len(value)
@@ -62,6 +80,16 @@ def _remove_controls(value: str) -> str:
 def _clean_name(value: str) -> str | None:
     """制御文字と前後の空白を除く。空になれば None。"""
     return _remove_controls(value).strip() or None
+
+
+def _clean_text(value: str) -> str:
+    """書き起こしの本文から、改行とタブ以外の制御文字・書式文字・区切りを除く。"""
+    value = value.replace("\r\n", "\n")
+    return "".join(
+        ch
+        for ch in value
+        if ch in _KEPT_IN_TEXT or unicodedata.category(ch) not in _REMOVED_CATEGORIES
+    )
 
 
 def sanitize_component(value: str, max_len: int) -> str | None:
@@ -157,3 +185,37 @@ def parse_classification(
         created=_parse_created(created, today),
         confident=confident,
     )
+
+
+def parse_pages(result_text: str, *, expected: int) -> tuple[PageText, ...]:
+    """Claude の出力から、ページごとの書き起こし（`pages`）を取り出して検証する。
+
+    1〜expected のページがちょうど 1 回ずつ揃わない、キーが欠ける、型が違うときは
+    DocumentFailure を送出する。長すぎる本文とページ番号は切り詰める。
+    """
+    obj = _extract_object(result_text)
+    rows = obj.get("pages")
+    if not isinstance(rows, list):
+        raise DocumentFailure("出力の pages が配列でない")
+    pages: dict[int, PageText] = {}
+    for row in rows:
+        if not isinstance(row, dict) or not {"page", "text", "label"} <= row.keys():
+            raise DocumentFailure("出力の pages の要素にキーがない")
+        number, text, label = row["page"], row["text"], row["label"]
+        if not (
+            type(number) is int
+            and isinstance(text, str)
+            and (label is None or isinstance(label, str))
+        ):
+            raise DocumentFailure("出力の pages の型が仕様と違う")
+        if not 1 <= number <= expected or number in pages:
+            raise DocumentFailure("出力の pages のページ番号が範囲外か重複している")
+        cleaned_label = None if label is None else _clean_name(label)
+        pages[number] = PageText(
+            page=number,
+            text=_clean_text(text)[:PAGE_TEXT_MAX],
+            label=None if cleaned_label is None else cleaned_label[:PAGE_LABEL_MAX],
+        )
+    if len(pages) != expected:
+        raise DocumentFailure("出力の pages にページが揃っていない")
+    return tuple(pages[n] for n in range(1, expected + 1))
