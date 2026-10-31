@@ -292,3 +292,61 @@ def test_onceでは受け口を開かない(monkeypatch: pytest.MonkeyPatch, env
     monkeypatch.setattr(app, "WakeServer", boom)
     monkeypatch.setattr(app, "run_cycle", lambda *a, **k: CycleResult())
     assert app.main(["--once"]) == 0
+
+
+def test_受け口を開けなくてもPaperlessのクライアントを閉じる(
+    monkeypatch: pytest.MonkeyPatch, env: None
+) -> None:
+    monkeypatch.setenv("WEBHOOK_TOKEN", "w" * 32)
+    closed: list[str] = []
+
+    class FakePaperless:
+        def __init__(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            pass
+
+        def close(self) -> None:
+            closed.append("paperless")
+
+    def boom(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        raise OSError("address in use")
+
+    monkeypatch.setattr(app, "PaperlessClient", FakePaperless)
+    monkeypatch.setattr(app, "WakeServer", boom)
+    with pytest.raises(OSError):
+        app.main([])
+    assert closed == ["paperless"]
+
+
+def test_受け口を閉じる例外が出てもPaperlessのクライアントを閉じる(
+    monkeypatch: pytest.MonkeyPatch, env: None
+) -> None:
+    monkeypatch.setenv("WEBHOOK_TOKEN", "w" * 32)
+    closed: list[str] = []
+
+    class FakePaperless:
+        def __init__(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            pass
+
+        def close(self) -> None:
+            closed.append("paperless")
+
+    class FakeServer:
+        def __init__(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            pass
+
+        def start(self) -> None:
+            pass
+
+        def close(self) -> None:
+            raise OSError("close failed")
+
+    def fake(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        app.request_stop()
+        return CycleResult()
+
+    monkeypatch.setattr(app, "PaperlessClient", FakePaperless)
+    monkeypatch.setattr(app, "WakeServer", FakeServer)
+    monkeypatch.setattr(app, "run_cycle", fake)
+    with pytest.raises(OSError):
+        app.main([])
+    assert closed == ["paperless"]

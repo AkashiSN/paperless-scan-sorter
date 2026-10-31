@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hmac
 import logging
+import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -16,15 +17,59 @@ logger = logging.getLogger(__name__)
 PATH = "/wake"
 # Paperless の Webhook は書類の情報を本文に付けうる。読み捨てるだけなので小さく制限する。
 MAX_BODY_BYTES = 64 * 1024
+# 1 接続の読み取りの期限と、同時に扱う接続の上限。途中まで送って止まる接続でスレッドが
+# 溜まらないようにする。Webhook は 1 回の要求で終わるので、どちらも小さくてよい。
+DEFAULT_READ_TIMEOUT = 5.0
+DEFAULT_MAX_CONNECTIONS = 8
+
+
+class _Server(ThreadingHTTPServer):
+    """同時接続数を slots で制限し、終了時に処理中のハンドラを待つ HTTP サーバー。"""
+
+    daemon_threads = False
+    block_on_close = True
+
+    def __init__(self, address: tuple[str, int], handler: type, max_connections: int) -> None:
+        super().__init__(address, handler)
+        self._slots = threading.BoundedSemaphore(max_connections)
+
+    def process_request(self, request: socket.socket, client_address: object) -> None:
+        if not self._slots.acquire(blocking=False):
+            # 上限を超えた接続は、読まずにすぐ閉じる。
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request: socket.socket, client_address: object) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
 
 
 class WakeServer:
     """`POST /wake` を受けて event を立てる HTTP サーバー。別スレッドで待ち受ける。"""
 
-    def __init__(self, token: str, event: threading.Event, *, host: str, port: int) -> None:
+    def __init__(
+        self,
+        token: str,
+        event: threading.Event,
+        *,
+        host: str,
+        port: int,
+        read_timeout: float = DEFAULT_READ_TIMEOUT,
+        max_connections: int = DEFAULT_MAX_CONNECTIONS,
+    ) -> None:
         expected = f"Bearer {token}".encode()
 
         class Handler(BaseHTTPRequestHandler):
+            # 接続のソケットに読み取りの期限を付ける（StreamRequestHandler が settimeout する）。
+            timeout = read_timeout
+
             def do_POST(self) -> None:  # noqa: N802 - http.server が決める名前
                 if self.path != PATH:
                     self._reply(404)
@@ -34,14 +79,26 @@ class WakeServer:
                     logger.warning("Webhook の合言葉が合わないので捨てる")
                     self._reply(401)
                     return
+                # 本文の長さは Content-Length だけで受ける。chunked などを読まずに通すと、
+                # 本文の上限が効かなくなる。
+                if "Transfer-Encoding" in self.headers:
+                    self._reply(400)
+                    return
+                raw = self.headers.get("Content-Length")
                 try:
-                    length = int(self.headers.get("Content-Length") or 0)
+                    length = 0 if raw is None else int(raw)
                 except ValueError:
                     length = -1
-                if not 0 <= length <= MAX_BODY_BYTES:
+                if length < 0:
+                    self._reply(400)
+                    return
+                if length > MAX_BODY_BYTES:
                     self._reply(413)
                     return
-                self.rfile.read(length)
+                body = self.rfile.read(length)
+                if len(body) != length:
+                    # 期限までに本文が揃わなかった。
+                    return
                 logger.info("Webhook を受けたので次の周期を早める")
                 event.set()
                 self._reply(204)
@@ -54,15 +111,15 @@ class WakeServer:
             def _reply(self, status: int) -> None:
                 self.send_response(status)
                 self.send_header("Content-Length", "0")
+                self.send_header("Connection", "close")
                 self.end_headers()
+                self.close_connection = True
 
             def log_message(self, format: str, *args: object) -> None:  # noqa: A002
-                # 既定は stderr に要求行を出す。合言葉は要求行に無いが、ログの書式を揃えるため
-                # 状態コードだけを DEBUG で残す。
-                logger.debug("Webhook の要求: %s", args[1] if len(args) > 1 else "")
+                # 既定は stderr に要求行を出す。書式を揃えるため DEBUG で残す。
+                logger.debug("Webhook の要求: " + format, *args)
 
-        self._httpd = ThreadingHTTPServer((host, port), Handler)
-        self._httpd.daemon_threads = True
+        self._httpd = _Server((host, port), Handler, max_connections)
         self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
 
     @property
@@ -74,6 +131,8 @@ class WakeServer:
         logger.info("Webhook の受け口をポート %d で開いた", self.port)
 
     def close(self) -> None:
-        self._httpd.shutdown()
+        """待ち受けをやめ、処理中の接続が終わる（遅くとも読み取りの期限）まで待つ。"""
+        if self._thread.is_alive():
+            self._httpd.shutdown()
         self._httpd.server_close()
         self._thread.join(timeout=5)

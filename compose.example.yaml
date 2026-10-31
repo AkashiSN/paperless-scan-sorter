@@ -82,8 +82,10 @@ services:
       INTERVAL: ${INTERVAL:-300}
       CLAUDE_MODEL: ${CLAUDE_MODEL:-sonnet}
       CLAUDE_TIMEOUT: ${CLAUDE_TIMEOUT:-600}
-      # 空でなければ Webhook の受け口（http://ai-classifier:8080/wake）を開く。Paperless の
-      # ワークフローの Webhook から呼ばれ、次の周期を待たずに処理を始める。ports で公開しない。
+      # 空でなければ Webhook の受け口（http://ai-classifier:${WEBHOOK_PORT}/wake）を開く。
+      # Paperless のワークフローの Webhook から呼ばれ、次の周期を待たずに処理を始める。
+      # ports で公開しない。
       WEBHOOK_TOKEN: ${WEBHOOK_TOKEN:-}
+      WEBHOOK_PORT: ${WEBHOOK_PORT:-8080}
       # created の未来日判定に使う「今日」を Paperless と同じタイムゾーンにする。
       TZ: ${TZ}

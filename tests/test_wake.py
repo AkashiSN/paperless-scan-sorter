@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import logging
+import socket
 import threading
+import time
 from collections.abc import Iterator
 
 import httpx
@@ -92,3 +94,99 @@ def test_closeすると待ち受けをやめる() -> None:
     srv.close()
     with pytest.raises(httpx.TransportError):
         httpx.post(f"http://127.0.0.1:{port}/wake", timeout=1)
+
+
+def _raw(srv: WakeServer) -> socket.socket:
+    return socket.create_connection(("127.0.0.1", srv.port), timeout=5)
+
+
+def _status(sock: socket.socket) -> int:
+    return int(sock.recv(64).split()[1])
+
+
+def test_途中で止まった接続は読み取りの期限で切る() -> None:
+    srv = WakeServer(TOKEN, threading.Event(), host="127.0.0.1", port=0, read_timeout=0.2)
+    srv.start()
+    try:
+        with _raw(srv) as sock:
+            sock.sendall(b"POST /wake HTTP/1.1\r\nAuthor")
+            start = time.monotonic()
+            sock.recv(64)  # 期限で切られれば空か 408 が返る
+            assert time.monotonic() - start < 3
+    finally:
+        srv.close()
+
+
+def test_本文が届かなければ期限で切り起こさない() -> None:
+    event = threading.Event()
+    srv = WakeServer(TOKEN, event, host="127.0.0.1", port=0, read_timeout=0.2)
+    srv.start()
+    try:
+        with _raw(srv) as sock:
+            sock.sendall(
+                f"POST /wake HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\n"
+                "Content-Length: 100\r\n\r\nabc".encode()
+            )
+            start = time.monotonic()
+            sock.recv(64)
+            assert time.monotonic() - start < 3
+        assert not event.is_set()
+    finally:
+        srv.close()
+
+
+def test_同時接続の上限を超えた接続はすぐ閉じる() -> None:
+    srv = WakeServer(
+        TOKEN, threading.Event(), host="127.0.0.1", port=0, read_timeout=2.0, max_connections=2
+    )
+    srv.start()
+    held = [_raw(srv), _raw(srv)]
+    try:
+        time.sleep(0.2)
+        with _raw(srv) as extra:
+            start = time.monotonic()
+            assert extra.recv(64) == b""
+            assert time.monotonic() - start < 1.5
+    finally:
+        for s in held:
+            s.close()
+        srv.close()
+
+
+def test_処理中の接続があってもcloseは期限内に終わる() -> None:
+    srv = WakeServer(TOKEN, threading.Event(), host="127.0.0.1", port=0, read_timeout=0.3)
+    srv.start()
+    sock = _raw(srv)
+    try:
+        sock.sendall(b"POST /wake HTTP/1.1\r\n")
+        time.sleep(0.1)
+        start = time.monotonic()
+        srv.close()
+        assert time.monotonic() - start < 3
+    finally:
+        sock.close()
+
+
+@pytest.mark.parametrize(
+    ("extra", "status"),
+    [
+        ("Transfer-Encoding: chunked\r\n", 400),
+        ("Transfer-Encoding: chunked\r\nContent-Length: 3\r\n", 400),
+        ("Content-Length: -1\r\n", 400),
+        ("Content-Length: abc\r\n", 400),
+        ("", 204),
+    ],
+)
+def test_本文の長さの扱い(extra: str, status: int) -> None:
+    event = threading.Event()
+    srv = WakeServer(TOKEN, event, host="127.0.0.1", port=0, read_timeout=1.0)
+    srv.start()
+    try:
+        with _raw(srv) as sock:
+            sock.sendall(
+                f"POST /wake HTTP/1.1\r\nAuthorization: Bearer {TOKEN}\r\n{extra}\r\n".encode()
+            )
+            assert _status(sock) == status
+        assert event.is_set() is (status == 204)
+    finally:
+        srv.close()

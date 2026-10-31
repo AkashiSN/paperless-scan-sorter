@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import logging
 import os
 import signal
@@ -103,14 +104,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     created = CreatedStore(settings.state_dir / "created.json")
     originals = OriginalsStore(settings.state_dir / "originals")
     claude = ClaudeClient(model=settings.model, timeout=settings.claude_timeout, env=os.environ)
-    paperless = PaperlessClient(settings.paperless_url, settings.paperless_token)
-    server = None
-    if not args.once and settings.webhook_token is not None:
-        server = WakeServer(
-            settings.webhook_token, _wake, host=WEBHOOK_HOST, port=settings.webhook_port
-        )
-        server.start()
-    try:
+    with contextlib.ExitStack() as cleanup:
+        paperless = PaperlessClient(settings.paperless_url, settings.paperless_token)
+        cleanup.callback(paperless.close)
+        if not args.once and settings.webhook_token is not None:
+            server = WakeServer(
+                settings.webhook_token, _wake, host=WEBHOOK_HOST, port=settings.webhook_port
+            )
+            cleanup.callback(server.close)
+            server.start()
         while True:
             failed = False
             try:
@@ -134,10 +136,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 1 if failed else 0
             if _wait(settings.interval):
                 return 0
-    finally:
-        if server is not None:
-            server.close()
-        paperless.close()
 
 
 if __name__ == "__main__":

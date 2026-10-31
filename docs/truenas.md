@@ -91,6 +91,7 @@ chown 1000:1000 <root>/classifier
 | `${PAPERLESS_TOKEN}` | いったん空の文字列 `""`。手順 7 で入れる |
 | `${CLAUDE_CODE_OAUTH_TOKEN}` | いったん空の文字列 `""`。手順 7 で入れる |
 | `${WEBHOOK_TOKEN:-}` | いったん空の文字列 `""`。Webhook を使うなら手順 7 で入れる |
+| `${WEBHOOK_PORT:-8080}` | `8080` |
 | `${INTERVAL:-300}` など既定値つきのもの | そのまま既定値（`300`、`sonnet`、`600`）を書く |
 
 Paperless のイメージは配置例では `:latest` です。運用では版を固定します（例: `ghcr.io/paperless-ngx/paperless-ngx:2.x.y`）。ai-classifier のイメージ `ghcr.io/akashisn/paperless-scan-sorter:latest` は main の先頭を指すので、固定したいときは `:sha-1234567` のようにコミットのタグにします。
