@@ -221,3 +221,34 @@ def test_少しずつ送り続ける接続も接続からの期限で切る() ->
         close_start = time.monotonic()
         srv.close()
         assert time.monotonic() - close_start < 2
+
+
+def test_期限のタイマーを開始できなくても接続枠を返し接続を閉じる(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import paperless_scan_sorter.wake as wake
+
+    class BrokenTimer:
+        def __init__(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            self.daemon = False
+
+        def start(self) -> None:
+            raise RuntimeError("can't start new thread")
+
+        def cancel(self) -> None:
+            pass
+
+    srv = WakeServer(
+        TOKEN, threading.Event(), host="127.0.0.1", port=0, read_timeout=1.0, max_connections=1
+    )
+    srv.start()
+    try:
+        monkeypatch.setattr(wake.threading, "Timer", BrokenTimer)
+        with _raw(srv) as sock:
+            assert sock.recv(64) == b""
+        monkeypatch.undo()
+        # 枠が 1 つだけでも、返っていれば次の要求を受けられる。
+        r = httpx.post(_url(srv), headers={"Authorization": f"Bearer {TOKEN}"})
+        assert r.status_code == 204
+    finally:
+        srv.close()

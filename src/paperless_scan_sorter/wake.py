@@ -53,13 +53,21 @@ class _Server(ThreadingHTTPServer):
             raise
 
     def process_request_thread(self, request: socket.socket, client_address: object) -> None:
-        timer = threading.Timer(self._deadline, _cut, args=(request,))
-        timer.daemon = True
-        timer.start()
         try:
-            super().process_request_thread(request, client_address)
+            timer = threading.Timer(self._deadline, _cut, args=(request,))
+            timer.daemon = True
+            try:
+                timer.start()
+            except RuntimeError:
+                # スレッドを作れないときは、期限を付けられないので読まずに閉じる。
+                logger.warning("Webhook の接続に期限を付けられないので閉じる")
+                self.shutdown_request(request)
+                return
+            try:
+                super().process_request_thread(request, client_address)
+            finally:
+                timer.cancel()
         finally:
-            timer.cancel()
             self._slots.release()
 
 
