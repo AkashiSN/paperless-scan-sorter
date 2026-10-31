@@ -31,7 +31,9 @@ _stop = threading.Event()
 _wake = threading.Event()
 
 # Webhook の受け口はコンテナの中のネットワークで待ち受ける。ホストには公開しない。
-WEBHOOK_HOST = "0.0.0.0"  # noqa: S104 - Compose の内部ネットワークからの要求を受けるため
+# IPv6 と IPv4 の両方で受け、コンテナで IPv6 が使えなければ IPv4 だけで受ける。
+WEBHOOK_HOST = "::"
+WEBHOOK_HOST_IPV4 = "0.0.0.0"  # noqa: S104 - Compose の内部ネットワークからの要求を受けるため
 
 
 def request_stop() -> None:
@@ -108,9 +110,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         paperless = PaperlessClient(settings.paperless_url, settings.paperless_token)
         cleanup.callback(paperless.close)
         if not args.once and settings.webhook_token is not None:
-            server = WakeServer(
-                settings.webhook_token, _wake, host=WEBHOOK_HOST, port=settings.webhook_port
-            )
+            try:
+                server = WakeServer(
+                    settings.webhook_token, _wake, host=WEBHOOK_HOST, port=settings.webhook_port
+                )
+            except OSError as e:
+                logger.warning("Webhook の受け口を IPv6 で開けないので IPv4 だけで開く: %s", e)
+                server = WakeServer(
+                    settings.webhook_token,
+                    _wake,
+                    host=WEBHOOK_HOST_IPV4,
+                    port=settings.webhook_port,
+                )
             cleanup.callback(server.close)
             server.start()
         while True:

@@ -280,7 +280,7 @@ def test_WEBHOOK_TOKENがあれば受け口を開き終了時に閉じる(
     monkeypatch.setattr(app, "WakeServer", FakeServer)
     monkeypatch.setattr(app, "run_cycle", fake)
     assert app.main([]) == 0
-    assert events == ["init 0.0.0.0 0 True", "start", "close"]
+    assert events == ["init :: 0 True", "start", "close"]
 
 
 def test_onceでは受け口を開かない(monkeypatch: pytest.MonkeyPatch, env: None) -> None:
@@ -350,3 +350,32 @@ def test_受け口を閉じる例外が出てもPaperlessのクライアント�
     with pytest.raises(OSError):
         app.main([])
     assert closed == ["paperless"]
+
+
+def test_IPv6で受け口を開けなければIPv4だけで開く(
+    monkeypatch: pytest.MonkeyPatch, env: None
+) -> None:
+    monkeypatch.setenv("WEBHOOK_TOKEN", "w" * 32)
+    hosts: list[str] = []
+
+    class FakeServer:
+        def __init__(self, token, event, *, host, port):  # noqa: ANN001
+            hosts.append(host)
+            if host == "::":
+                raise OSError("Address family not supported by protocol")
+
+        def start(self) -> None:
+            pass
+
+        def close(self) -> None:
+            pass
+
+    def fake(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        app.request_stop()
+        return CycleResult()
+
+    monkeypatch.setattr(app, "WakeServer", FakeServer)
+    monkeypatch.setattr(app, "run_cycle", fake)
+    assert app.main([]) == 0
+    assert hosts == [app.WEBHOOK_HOST, app.WEBHOOK_HOST_IPV4]
+    assert app.WEBHOOK_HOST == "::"

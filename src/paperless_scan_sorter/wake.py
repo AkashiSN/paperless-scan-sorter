@@ -37,9 +37,18 @@ class _Server(ThreadingHTTPServer):
     def __init__(
         self, address: tuple[str, int], handler: type, max_connections: int, deadline: float
     ) -> None:
+        # IPv6 のアドレス（"::" など）なら IPv6 のソケットにし、server_bind で IPv4 も受ける。
+        self.address_family = socket.AF_INET6 if ":" in address[0] else socket.AF_INET
         super().__init__(address, handler)
         self._slots = threading.BoundedSemaphore(max_connections)
         self._deadline = deadline
+
+    def server_bind(self) -> None:
+        if self.address_family == socket.AF_INET6:
+            # Docker のネットワークで IPv6 が有効だと、サービス名は IPv6 のアドレスに引かれ、
+            # Paperless の Webhook はそのアドレスだけに接続する。IPv4 も同じソケットで受ける。
+            self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        super().server_bind()
 
     def process_request(self, request: socket.socket, client_address: object) -> None:
         if not self._slots.acquire(blocking=False):
