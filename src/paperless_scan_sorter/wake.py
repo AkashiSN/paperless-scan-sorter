@@ -47,6 +47,7 @@ class _Server(ThreadingHTTPServer):
         if self.address_family == socket.AF_INET6:
             # Docker のネットワークで IPv6 が有効だと、サービス名は IPv6 のアドレスに引かれ、
             # Paperless の Webhook はそのアドレスだけに接続する。IPv4 も同じソケットで受ける。
+            # 外せないときは IPv4 を受けられないので、例外のまま起動を失敗させる。
             self.socket.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
         super().server_bind()
 

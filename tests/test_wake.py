@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import logging
 import socket
 import threading
@@ -279,3 +280,18 @@ def test_コロンを含むホストではIPv6とIPv4の両方で受ける() -> 
         assert event.is_set()
     finally:
         srv.close()
+
+
+@needs_ipv6
+def test_IPV6_V6ONLYを外せなければ開かない(monkeypatch: pytest.MonkeyPatch) -> None:
+    real = socket.socket.setsockopt
+
+    def setsockopt(self, level, option, value):  # noqa: ANN001, ANN202
+        if level == socket.IPPROTO_IPV6 and option == socket.IPV6_V6ONLY:
+            raise OSError(errno.ENOPROTOOPT, "Protocol not available")
+        return real(self, level, option, value)
+
+    monkeypatch.setattr(socket.socket, "setsockopt", setsockopt)
+    with pytest.raises(OSError) as e:
+        WakeServer(TOKEN, threading.Event(), host="::", port=0)
+    assert e.value.errno == errno.ENOPROTOOPT

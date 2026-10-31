@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import logging
 from datetime import date
 from pathlib import Path
@@ -362,7 +363,7 @@ def test_IPv6で受け口を開けなければIPv4だけで開く(
         def __init__(self, token, event, *, host, port):  # noqa: ANN001
             hosts.append(host)
             if host == "::":
-                raise OSError("Address family not supported by protocol")
+                raise OSError(errno.EAFNOSUPPORT, "Address family not supported by protocol")
 
         def start(self) -> None:
             pass
@@ -379,3 +380,22 @@ def test_IPv6で受け口を開けなければIPv4だけで開く(
     assert app.main([]) == 0
     assert hosts == [app.WEBHOOK_HOST, app.WEBHOOK_HOST_IPV4]
     assert app.WEBHOOK_HOST == "::"
+
+
+@pytest.mark.parametrize("code", [errno.EADDRINUSE, errno.EACCES])
+def test_IPv6が使えないこと以外のエラーではIPv4で開き直さない(
+    monkeypatch: pytest.MonkeyPatch, env: None, code: int
+) -> None:
+    monkeypatch.setenv("WEBHOOK_TOKEN", "w" * 32)
+    hosts: list[str] = []
+
+    class FakeServer:
+        def __init__(self, token, event, *, host, port):  # noqa: ANN001
+            hosts.append(host)
+            raise OSError(code, "bind failed")
+
+    monkeypatch.setattr(app, "WakeServer", FakeServer)
+    with pytest.raises(OSError) as e:
+        app.main([])
+    assert e.value.errno == code
+    assert hosts == [app.WEBHOOK_HOST]
